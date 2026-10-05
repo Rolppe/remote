@@ -30,7 +30,7 @@ enum Palvelu: String, CaseIterable, Identifiable, Hashable {
         case .liveTV: "com.webos.app.livetv"
         case .netflix: "netflix"
         case .phono: ""
-        case .areena: "yle.areena"
+        case .areena: "fi.yle.areena"
         case .prime: "amazon"
         case .youtube: "youtube.leanback.v4"
         }
@@ -102,9 +102,10 @@ extension LGTV {
             tila = "\(p.nimi): \(error.localizedDescription)"
             return
         }
-        // Profiilivalinta näkyy vain, kun Netflix käynnistyy alusta (ei jo etualalla ollessaan).
-        if p == .netflix && ennen != "netflix" { profiiliValinta = true }
         tila = "\(p.nimi) auki"
+        // Profiilivalinta näkyy vain, kun kuvakaappaus näyttää Netflixin profiiliruudun (0,1 s = yksi kuva:
+        // ruutu voi olla jo näkyvissä).
+        if p == .netflix { await netflixProfiiliTarkkailu(aikaa: ennen == "netflix" ? 0.1 : 10) }
     }
 
     // Active = päällä; Screen Off = päällä, kuva pois (kuva päälle); valmiustila = ei päällä.
@@ -146,15 +147,6 @@ extension LGTV {
     private func kaynnistaId(_ id: String) async throws {
         let v = try await pyyda("ssap://system.launcher/launch", ["id": id], aika: 6)
         if (v["payload"] as? [String: Any])?["returnValue"] as? Bool == false { throw virhe("käynnistys hylätty") }
-    }
-
-    func profiiliSiirto(_ suunta: Int) { nappi(suunta > 0 ? "RIGHT" : "LEFT") }
-
-    // Sormen nosto vahvistaa: OK vasta, kun Netflix on etualalla (muuten OK osuisi muualle).
-    func profiiliValitse() {
-        guard netflix else { return }
-        nappi("ENTER")
-        profiiliValinta = false
     }
 }
 

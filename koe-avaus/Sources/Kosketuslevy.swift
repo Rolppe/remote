@@ -66,6 +66,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var etuala: String?          // TV:n etualalla oleva sovellus (appId)
     @Published var kaynnistys: String?      // aloitussivun valinnan eteneminen (Aloitus.swift)
     @Published var profiiliValinta = false  // Netflixin profiilin valinta liukusäätimellä
+    @Published var profiilit: NetflixProfiilit?   // TV:n kuvakaappauksesta tunnistetut profiilit
+    @Published var profiiliKuvat: [UIImage] = []  // profiilien omat kuvat (rajaukset kuvakaappauksesta)
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
@@ -218,15 +220,19 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    private func kuvakaappaus() async throws -> NetflixKuva {
+    private func kuvakaappausKuva() async throws -> CGImage {
         let v = try await pyyda("ssap://tv/executeOneShot", ["path": "/tmp/capture.png", "method": "DISPLAY",
                                                              "format": "PNG"])
         guard let uri = (v["payload"] as? [String: Any])?["imageUri"] as? String,
               let url = URL(string: uri) else { throw virhe("ei kuvakaappausta") }
         let (data, _) = try await session.data(from: url)
         guard let lahde = CGImageSourceCreateWithData(data as CFData, nil),
-              let kuva = CGImageSourceCreateImageAtIndex(lahde, 0, nil),
-              let pisteet = Kuvapisteet(kuva) else { throw virhe("kuvaa ei voi lukea") }
+              let kuva = CGImageSourceCreateImageAtIndex(lahde, 0, nil) else { throw virhe("kuvaa ei voi lukea") }
+        return kuva
+    }
+
+    private func kuvakaappaus() async throws -> NetflixKuva {
+        guard let pisteet = Kuvapisteet(try await kuvakaappausKuva()) else { throw virhe("kuvaa ei voi lukea") }
         return NetflixRuudukko.tunnista(pisteet)
     }
 
@@ -236,6 +242,57 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             osoitinViesti("type:button\nname:\(n)\n\n")
             try await Task.sleep(nanoseconds: UInt64(viive * 1_000_000_000))
         }
+    }
+
+    // Profiilivalinta näkyy vain, kun kuvakaappaus näyttää Netflixin "Kuka katsoo?" -ruudun: kuvaa katsotaan
+    // 0,6 s välein aikaa sekuntia. Osuessa profiilien omat kuvat otetaan talteen ja oletusprofiili valitaan.
+    func netflixProfiiliTarkkailu(aikaa: Double) async {
+        let raja = Date().addingTimeInterval(aikaa)
+        while !Task.isCancelled {
+            if let kuva = try? await kuvakaappausKuva(), let pisteet = Kuvapisteet(kuva),
+               let p = NetflixRuudukko.tunnistaProfiilit(pisteet) {
+                profiilit = p
+                profiiliKuvat = p.ruudut.map { r in
+                    UIGraphicsImageRenderer(size: r.size).image { _ in
+                        UIImage(cgImage: kuva).draw(in: CGRect(x: -r.minX, y: -r.minY, width: 960, height: 540))
+                    }
+                }
+                profiiliValinta = true
+                if let oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int,
+                   oletus < p.ruudut.count {
+                    await profiiliValitse(oletus)
+                }
+                return
+            }
+            guard Date() < raja else { return }
+            try? await Task.sleep(nanoseconds: 600_000_000)
+        }
+    }
+
+    // Liukusäädin siirtää TV:n valintaa (lista on pystysuora: alas = seuraava) ja päivittää fokuksen myös täällä.
+    func profiiliSiirto(_ suunta: Int) {
+        nappi(suunta > 0 ? "DOWN" : "UP")
+        guard let p = profiilit else { return }
+        profiilit = NetflixProfiilit(fokus: max(0, min(p.ruudut.count - 1, p.fokus + suunta)), ruudut: p.ruudut)
+    }
+
+    // OK vasta, kun TV:n kuva vahvistaa fokuksen (indeksillä: UP ylös asti, DOWN indeksin verran).
+    func profiiliValitse(_ indeksi: Int? = nil) async {
+        guard netflix else { return }
+        if let indeksi {
+            try? await painele(Array(repeating: "UP", count: profiilit?.ruudut.count ?? 8)
+                               + Array(repeating: "DOWN", count: indeksi), 0.15)
+            try? await Task.sleep(nanoseconds: 500_000_000)
+        }
+        guard let kuva = try? await kuvakaappausKuva(), let pisteet = Kuvapisteet(kuva),
+              let nyt = NetflixRuudukko.tunnistaProfiilit(pisteet), indeksi == nil || nyt.fokus == indeksi else {
+            tila = "Netflix: profiilin fokus ei täsmää — valitse uudelleen"
+            return
+        }
+        nappi("ENTER")
+        profiiliValinta = false
+        profiilit = nil
+        profiiliKuvat = []
     }
 
     // Kirjoittaa haun Netflixin ruudukolla sitä mukaa kuin kenttään kirjoitetaan: muutokset jonoon,

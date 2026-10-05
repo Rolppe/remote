@@ -117,15 +117,10 @@ struct TVOhjausView: View {
                 nappi("Koti", "house", "HOME") { dismiss() }
                 nappi("OK", "checkmark", "ENTER")
             }
-            HStack(spacing: 10) {
-                if palvelu == .liveTV {
+            if palvelu == .liveTV {
+                HStack(spacing: 10) {
                     nappi("Kanava −", "chevron.down", "CHANNELDOWN")
                     nappi("Kanava +", "chevron.up", "CHANNELUP")
-                } else {
-                    nappi(nil, "backward.fill", "REWIND")
-                    nappi(nil, "play.fill", "PLAY")
-                    nappi(nil, "pause.fill", "PAUSE")
-                    nappi(nil, "forward.fill", "FASTFORWARD")
                 }
             }
         }
@@ -148,64 +143,106 @@ struct TVOhjausView: View {
     }
 }
 
-// Netflixin "Kuka katsoo?": liu'utus siirtää TV:n valintaa askel kerrallaan (vasen/oikea),
-// sormen nosto valitsee (OK). Askel on suhteellinen, joten profiilien määrää ei tarvitse tietää.
+// Netflixin "Kuka katsoo?": profiilit TV:n kuvakaappauksesta pystylistana (oma kuva, fokus kehyksellä).
+// Napautus valitsee profiilin, pitkä painallus asettaa oletusprofiilin (tähti). Oikealla pystyliukusäädin
+// siirtää TV:n valintaa askel kerrallaan (alas = seuraava), sormen nosto valitsee (OK kuvan vahvistuksella).
 struct ProfiiliValinta: View {
     @ObservedObject var tv: LGTV
+    @State private var oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int
     @State private var edellinen: CGFloat = 0
     @State private var kertyma: CGFloat = 0
     @State private var siirto: CGFloat = 0
     private let askel: CGFloat = 46
     private let nuppi: CGFloat = 64
+    private let kuvaKoko: CGFloat = 56
 
     var body: some View {
-        VStack(spacing: 18) {
-            PalveluKuvake(palvelu: .netflix, koko: 64)
-            Text("Kuka katsoo?").font(.title2.bold())
-            Text(tv.netflix ? "Liu'uta profiilin kohdalle ja nosta sormi" : "Odotetaan Netflixiä…")
-                .font(.subheadline).foregroundStyle(.secondary)
-            GeometryReader { g in
-                let raja = max(0, (g.size.width - nuppi) / 2 - 4)
-                ZStack {
-                    Capsule().fill(Color(.tertiarySystemFill))
-                    HStack {
-                        Image(systemName: "chevron.left")
-                        Spacer()
-                        Image(systemName: "chevron.right")
-                    }
-                    .font(.title3.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .padding(.horizontal, 22)
-                    Circle()
-                        .fill(Color.accentColor)
-                        .frame(width: nuppi, height: nuppi)
-                        .overlay(Image(systemName: "person.fill").font(.title2).foregroundStyle(.white))
-                        .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
-                        .offset(x: siirto)
-                }
-                .contentShape(Capsule())
-                .gesture(DragGesture(minimumDistance: 0)
-                    .onChanged { v in
-                        let d = v.translation.width - edellinen
-                        edellinen = v.translation.width
-                        siirto = max(-raja, min(raja, v.translation.width))
-                        guard tv.netflix else { return }
-                        kertyma += d
-                        while kertyma >= askel { kertyma -= askel; askella(1) }
-                        while kertyma <= -askel { kertyma += askel; askella(-1) }
-                    }
-                    .onEnded { _ in
-                        edellinen = 0
-                        kertyma = 0
-                        withAnimation(.spring(duration: 0.3)) { siirto = 0 }
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        tv.profiiliValitse()
-                    })
+        let n = tv.profiiliKuvat.count
+        let korkeus = max(240, CGFloat(n) * kuvaKoko + CGFloat(max(0, n - 1)) * 10)
+        VStack(spacing: 14) {
+            HStack(spacing: 12) {
+                PalveluKuvake(palvelu: .netflix, koko: 44)
+                Text("Kuka katsoo?").font(.title2.bold())
             }
-            .frame(height: nuppi + 8)
+            HStack(alignment: .top, spacing: 24) {
+                VStack(spacing: 10) {
+                    ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
+                }
+                liukusaadin(korkeus)
+            }
+            Text("Pitkä painallus: oletusprofiili").font(.footnote).foregroundStyle(.secondary)
             Button("Ohita") { tv.profiiliValinta = false }
                 .font(.footnote)
         }
+    }
+
+    private func profiili(_ i: Int, _ kuva: UIImage) -> some View {
+        let muoto = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        return Image(uiImage: kuva)
+            .resizable().scaledToFill()
+            .frame(width: kuvaKoko, height: kuvaKoko)
+            .clipShape(muoto)
+            .overlay(muoto.stroke(Color.accentColor, lineWidth: tv.profiilit?.fokus == i ? 3 : 0))
+            .overlay(alignment: .topTrailing) {
+                if oletus == i {
+                    Image(systemName: "star.fill").font(.caption2).foregroundStyle(.yellow).padding(3)
+                }
+            }
+            .contentShape(muoto)
+            .onTapGesture {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                Task { await tv.profiiliValitse(i) }
+            }
+            .onLongPressGesture {
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                if oletus == i {
+                    oletus = nil
+                    UserDefaults.standard.removeObject(forKey: "netflix_oletusprofiili")
+                } else {
+                    oletus = i
+                    UserDefaults.standard.set(i, forKey: "netflix_oletusprofiili")
+                }
+            }
+    }
+
+    private func liukusaadin(_ korkeus: CGFloat) -> some View {
+        let raja = max(0, (korkeus - nuppi) / 2 - 4)
+        return ZStack {
+            Capsule().fill(Color(.tertiarySystemFill))
+            VStack {
+                Image(systemName: "chevron.up")
+                Spacer()
+                Image(systemName: "chevron.down")
+            }
+            .font(.title3.weight(.semibold))
+            .foregroundStyle(.secondary)
+            .padding(.vertical, 22)
+            Circle()
+                .fill(Color.accentColor)
+                .frame(width: nuppi, height: nuppi)
+                .overlay(Image(systemName: "person.fill").font(.title2).foregroundStyle(.white))
+                .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
+                .offset(y: siirto)
+        }
+        .frame(width: 72, height: korkeus)
+        .contentShape(Capsule())
+        .gesture(DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                let d = v.translation.height - edellinen
+                edellinen = v.translation.height
+                siirto = max(-raja, min(raja, v.translation.height))
+                guard tv.netflix else { return }
+                kertyma += d
+                while kertyma >= askel { kertyma -= askel; askella(1) }
+                while kertyma <= -askel { kertyma += askel; askella(-1) }
+            }
+            .onEnded { _ in
+                edellinen = 0
+                kertyma = 0
+                withAnimation(.spring(duration: 0.3)) { siirto = 0 }
+                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                Task { await tv.profiiliValitse() }
+            })
     }
 
     private func askella(_ suunta: Int) {

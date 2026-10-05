@@ -92,6 +92,54 @@ struct Kuvapisteet {
         let i = (y * Kuvapisteet.leveys + x) * 4
         return (Double(data[i]) + Double(data[i + 1]) + Double(data[i + 2])) / 3
     }
+
+    func rgb(_ x: Int, _ y: Int) -> (Double, Double, Double) {
+        guard x >= 0, y >= 0, x < Kuvapisteet.leveys, y < Kuvapisteet.korkeus else { return (0, 0, 0) }
+        let i = (y * Kuvapisteet.leveys + x) * 4
+        return (Double(data[i]), Double(data[i + 1]), Double(data[i + 2]))
+    }
+}
+
+// Netflixin "Kuka katsoo?" -ruutu (REMOTE-ALOITUS-PROFIILI): profiilit ovat pystylistana x = 148 ympärillä.
+// ruudut = profiilien neliöt 960×540-kuvassa, fokus = isompana näkyvän (valkoreunaisen) profiilin indeksi.
+struct NetflixProfiilit: Equatable {
+    let fokus: Int
+    let ruudut: [CGRect]
+}
+
+extension NetflixRuudukko {
+    // Mitattu 5.10.2026: punainen NETFLIX-sana x 90..<205, y 25..<58 (904–908 pistettä); ruutu on rivi,
+    // jonka kohdalla jokin x = 130, 148, 165 on pohjaa (< 45) kirkkaampi. Fokusruudun kehys katkoo
+    // jakson, joten ≤ 8 pisteen raot yhdistetään. Fokusruutu 95–96 pistettä, muut 63–64.
+    static func tunnistaProfiilit(_ k: Kuvapisteet) -> NetflixProfiilit? {
+        var sana = 0
+        for x in 90..<205 {
+            for y in 25..<58 {
+                let (r, g, b) = k.rgb(x, y)
+                if r > 170 && g < 70 && b < 70 { sana += 1 }
+            }
+        }
+        guard sana >= 600 else { return nil }
+        var jaksot: [(Int, Int)] = [] // (alku, loppu), loppu poissulkeva
+        for y in 80..<Kuvapisteet.korkeus {
+            let ruutu = [130, 148, 165].contains { x in let (r, g, b) = k.rgb(x, y); return max(r, g, b) > 45 }
+            guard ruutu else { continue }
+            if let viimeinen = jaksot.last, y - viimeinen.1 <= 8 {
+                jaksot[jaksot.count - 1].1 = y + 1
+            } else {
+                jaksot.append((y, y + 1))
+            }
+        }
+        jaksot = jaksot.filter { $0.1 - $0.0 >= 50 }
+        let korkeudet = jaksot.map { $0.1 - $0.0 }
+        guard (2...8).contains(jaksot.count), korkeudet.filter({ $0 >= 80 }).count == 1,
+              let fokus = korkeudet.firstIndex(where: { $0 >= 80 }) else { return nil }
+        let ruudut = jaksot.map { j -> CGRect in
+            let puoli = Double(j.1 - j.0)
+            return CGRect(x: 148 - puoli / 2, y: Double(j.0), width: puoli, height: puoli)
+        }
+        return NetflixProfiilit(fokus: fokus, ruudut: ruudut)
+    }
 }
 
 enum NetflixTila: Equatable {
