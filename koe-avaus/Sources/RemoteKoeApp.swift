@@ -121,54 +121,50 @@ struct RemoteKoeApp: App {
     }
 }
 
+enum Reitti: Hashable {
+    case palvelu(Palvelu)
+    case kosketuslevy
+}
+
+// Juuri: aloitussivu (Aloitus.swift) → valinnan ohjausnäkymä (Ohjaus.swift). TV-yhteys elää täällä,
+// jotta se on valmiina jo valinnan hetkellä (VAATIMUS: REMOTE-NOPEA): yhdistys sovelluksen aktivoituessa.
 struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
-    @State private var status = "–"
+    @StateObject private var tv = LGTV()
+    @State private var polku: [Reitti] = []
+    @State private var laitteet = false
+    @State private var status = ""
     @State private var firstActive = true
-    @State private var kosketuslevy = false
 
     var body: some View {
-        VStack(spacing: 12) {
-            Text("Kauko").font(.largeTitle.bold())
-            ScrollView {
-                VStack(alignment: .leading, spacing: 10) {
-                    section("Vahvistin")
-                    big("Päälle", "amp_paalle")
-                    big("Pois", "amp_pois")
-                    big("Mykistys", "amp_mykistys")
-                    section("Lähde")
-                    big("Optical", "amp_optical")
-                    big("Phono", "amp_phono")
-                    section("Ääni")
-                    HStack(spacing: 10) {
-                        big("−", "aani_alas")
-                        big("+", "aani_ylos")
-                    }
-                    section("TV")
-                    big("Päälle", "lg_paalle")
-                    big("Pois", "lg_pois")
-                    Button {
-                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                        kosketuslevy = true
-                    } label: {
-                        Text("Kosketuslevy")
-                            .font(.title2.bold())
-                            .frame(maxWidth: .infinity, minHeight: 64)
-                    }
-                    .buttonStyle(.bordered)
+        NavigationStack(path: $polku) {
+            AloitusView(avaa: avaa, laitteet: $laitteet)
+                .safeAreaInset(edge: .bottom) {
+                    Text(status).font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
+                        .padding(.bottom, 6)
                 }
-            }
-            Text(status)
-                .font(.footnote)
-                .monospacedDigit()
-                .lineLimit(2)
+                .navigationDestination(for: Reitti.self) { r in
+                    switch r {
+                    case .palvelu(.phono): PhonoView()
+                    case .palvelu(let p): TVOhjausView(palvelu: p)
+                    case .kosketuslevy: TVOhjausView(palvelu: nil)
+                    }
+                }
         }
-        .padding(.horizontal)
+        .environmentObject(tv)
+        .sheet(isPresented: $laitteet) {
+            LaitteetView {
+                laitteet = false
+                polku.append(.kosketuslevy)
+            }
+        }
         .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
-        .fullScreenCover(isPresented: $kosketuslevy) { KosketuslevyView() }
         .onReceive(AaniNapit.shared.$viesti.dropFirst()) { status = $0 }
         .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .background { AaniNapit.shared.pysayta() }
+            if phase == .background {
+                AaniNapit.shared.pysayta()
+                tv.katkaise()
+            }
             guard phase == .active else { return }
             AaniNapit.shared.kaynnista()
             var launch = 0
@@ -178,23 +174,14 @@ struct ContentView: View {
                 if let varoitus = allekirjoitusVaroitus() { status = varoitus }
             }
             Task { await warmUp(launch: launch) }
+            Task { await tv.yhdista(aikaraja: 3) }
         }
     }
 
-    func section(_ title: String) -> some View {
-        Text(title).font(.headline).padding(.top, 4)
-    }
-
-    func big(_ label: String, _ nimi: String) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            Task { status = await lahetaKomento(label: label, nimi: nimi) }
-        } label: {
-            Text(label)
-                .font(.title2.bold())
-                .frame(maxWidth: .infinity, minHeight: 64)
-        }
-        .buttonStyle(.borderedProminent)
+    func avaa(_ p: Palvelu) {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+        polku.append(.palvelu(p))
+        Task { await tv.kaynnista(p) }
     }
 
     func warmUp(launch: Int) async {
@@ -205,5 +192,88 @@ struct ContentView: View {
         guard let url = URL(string: baseURL + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)" + lisa) else { return }
         let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
         _ = try? await URLSession.shared.data(for: req)
+    }
+}
+
+// Laitteet-paneeli: yksittäiset IR-komennot (v1:n napit) ja pelkkä kosketuslevy.
+struct LaitteetView: View {
+    let avaaKosketuslevy: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @State private var status = "–"
+
+    var body: some View {
+        NavigationStack {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    Button(role: .destructive) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        Task {
+                            let a = await lahetaKomento(label: "TV pois", nimi: "lg_pois")
+                            let b = await lahetaKomento(label: "Vahvistin pois", nimi: "amp_pois")
+                            status = a + " · " + b
+                        }
+                    } label: {
+                        Label("Sammuta kaikki", systemImage: "power")
+                            .font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 56)
+                    }
+                    .buttonStyle(.bordered)
+                    section("Vahvistin")
+                    HStack(spacing: 10) {
+                        big("Päälle", "amp_paalle")
+                        big("Pois", "amp_pois")
+                    }
+                    big("Mykistys", "amp_mykistys")
+                    section("Lähde")
+                    HStack(spacing: 10) {
+                        big("Optical", "amp_optical")
+                        big("Phono", "amp_phono")
+                    }
+                    section("Ääni")
+                    HStack(spacing: 10) {
+                        big("−", "aani_alas")
+                        big("+", "aani_ylos")
+                    }
+                    section("TV")
+                    HStack(spacing: 10) {
+                        big("Päälle", "lg_paalle")
+                        big("Pois", "lg_pois")
+                    }
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        avaaKosketuslevy()
+                    } label: {
+                        Label("Kosketuslevy", systemImage: "hand.point.up.left")
+                            .font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 56)
+                    }
+                    .buttonStyle(.bordered)
+                }
+                .padding(.horizontal)
+            }
+            .safeAreaInset(edge: .bottom) {
+                Text(status).font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
+            }
+            .navigationTitle("Laitteet")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) { Button("Valmis") { dismiss() }.bold() }
+            }
+        }
+        .onReceive(AaniNapit.shared.$viesti.dropFirst()) { status = $0 }
+    }
+
+    func section(_ title: String) -> some View {
+        Text(title).font(.headline).padding(.top, 6)
+    }
+
+    func big(_ label: String, _ nimi: String) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Task { status = await lahetaKomento(label: label, nimi: nimi) }
+        } label: {
+            Text(label)
+                .font(.title3.bold())
+                .frame(maxWidth: .infinity, minHeight: 56)
+        }
+        .buttonStyle(.borderedProminent)
     }
 }

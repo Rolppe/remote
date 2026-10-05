@@ -14,7 +14,7 @@ import UIKit
 // Kauko näyttää oman hakukentän ja ohjaa Netflixin kirjainruudukkoa (NetflixHaku.swift). Fokus
 // luetaan TV:n kuvakaappauksesta (tv/executeOneShot, lupa CONTROL_TV_SCREEN).
 
-private let syoteAlku = "\u{200B}" // näkymätön merkki: puhelimen askelpalautin poistaa merkkejä myös TV:ltä
+let syoteAlku = "\u{200B}" // näkymätön merkki: puhelimen askelpalautin poistaa merkkejä myös TV:ltä
 
 let tvHost = "192.0.2.10"
 private let avainKey = "lgtv_client_key"
@@ -37,7 +37,8 @@ private func manifest() -> [String: Any] {
         "permissions": ["LAUNCH", "CONTROL_AUDIO", "CONTROL_DISPLAY", "CONTROL_INPUT_JOYSTICK",
                         "CONTROL_INPUT_MEDIA_PLAYBACK", "CONTROL_INPUT_TV", "CONTROL_POWER",
                         "READ_APP_STATUS", "READ_POWER_STATE", "CONTROL_INPUT_TEXT",
-                        "CONTROL_MOUSE_AND_KEYBOARD", "CONTROL_TV_SCREEN", "READ_RUNNING_APPS"],
+                        "CONTROL_MOUSE_AND_KEYBOARD", "CONTROL_TV_SCREEN", "READ_RUNNING_APPS",
+                        "READ_INSTALLED_APPS"],
         "signatures": [["signature": manifestSignature, "signatureVersion": 1]],
         "signed": [
             "appId": "com.lge.test",
@@ -62,13 +63,17 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var nappaimisto = false
     @Published var netflix = false
     @Published var hakee = false
+    @Published var etuala: String?          // TV:n etualalla oleva sovellus (appId)
+    @Published var kaynnistys: String?      // aloitussivun valinnan eteneminen (Aloitus.swift)
+    @Published var profiiliValinta = false  // Netflixin profiilin valinta liukusäätimellä
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
     private var osoitin: URLSessionWebSocketTask?
     private var odotusDx = 0.0, odotusDy = 0.0
     private var lahettaa = false
-    private var yhdistaa = false
+    private var yhdistysTyo: Task<Void, Never>?
+    private var vastasi = false // TV vastasi tämän yhteyden ensimmäiseen viestiin
     private var pyyntoNro = 0
     private var odottavat: [String: CheckedContinuation<[String: Any], Error>] = [:]
     private let netflixViive = 0.05 // 40–80 ms ruudukon sisällä: 0/52 painallusta hukkui (5.10.2026)
@@ -89,10 +94,18 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         return (.performDefaultHandling, nil)
     }
 
-    func yhdista() async {
-        guard !yhdistaa, !valmis else { return }
-        yhdistaa = true
-        defer { yhdistaa = false }
+    // Yksi yhdistys kerrallaan: rinnakkainen kutsuja odottaa käynnissä olevaa. Sammuksissa oleva TV ei
+    // vastaa lainkaan, joten yhteys katkaistaan, jos ensimmäistä vastausta ei tule aikarajassa.
+    func yhdista(aikaraja: Double = 4) async {
+        if valmis { return }
+        if let tyo = yhdistysTyo { await tyo.value; return }
+        let tyo = Task { await yhdistaNyt(aikaraja) }
+        yhdistysTyo = tyo
+        await tyo.value
+        yhdistysTyo = nil
+    }
+
+    private func yhdistaNyt(_ aikaraja: Double) async {
         katkaise()
         let t0 = Date()
         tila = "Yhdistetään TV:hen…"
@@ -100,11 +113,19 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             let ws = session.webSocketTask(with: URL(string: "wss://\(tvHost):3001")!)
             ws.resume()
             paa = ws
+            vastasi = false
+            let vahti = Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(aikaraja * 1_000_000_000))
+                guard let self, !self.vastasi, self.paa === ws else { return }
+                ws.cancel(with: .goingAway, reason: nil)
+            }
+            defer { vahti.cancel() }
             var payload: [String: Any] = ["forcePairing": false, "pairingType": "PROMPT", "manifest": manifest()]
             if let avain = UserDefaults.standard.string(forKey: avainKey) { payload["client-key"] = avain }
             try await laheta(ws, ["type": "register", "id": "reg0", "payload": payload])
             while true {
                 let v = try await vastaanota(ws)
+                vastasi = true
                 let tyyppi = v["type"] as? String
                 if tyyppi == "registered" {
                     if let avain = (v["payload"] as? [String: Any])?["client-key"] as? String {
@@ -138,7 +159,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             kuuntele(ws)
         } catch {
             katkaise()
-            tila = "TV: \(error.localizedDescription)"
+            tila = vastasi ? "TV: \(error.localizedDescription)" : "TV ei vastaa (sammuksissa?)"
         }
     }
 
@@ -171,13 +192,14 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         if id == "ime", let widget = payload?["currentWidget"] as? [String: Any] {
             nappaimisto = widget["focus"] as? Bool ?? false
         } else if id == "fg", let appId = payload?["appId"] as? String {
+            etuala = appId
             netflix = appId == "netflix"
             if !netflix { netflixPaikka = nil; netflixKasin = false }
         }
     }
 
     // Pyyntö, jonka vastaus odotetaan pääyhteydeltä (id:llä); aikakatkaisu ettei haku jää jumiin.
-    private func pyyda(_ uri: String, _ payload: [String: Any], aika: Double = 4) async throws -> [String: Any] {
+    func pyyda(_ uri: String, _ payload: [String: Any], aika: Double = 4) async throws -> [String: Any] {
         guard let ws = paa else { throw virhe("ei yhteyttä") }
         pyyntoNro += 1
         let id = "q\(pyyntoNro)"
@@ -208,7 +230,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         return NetflixRuudukko.tunnista(pisteet)
     }
 
-    private func painele(_ napit: [String], _ viive: Double) async throws {
+    func painele(_ napit: [String], _ viive: Double) async throws {
         for n in napit {
             guard osoitin != nil else { throw virhe("yhteys katkesi") }
             osoitinViesti("type:button\nname:\(n)\n\n")
@@ -221,7 +243,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     // (ja fokus palautetaan nuolilla), ja sen jälkeen lasketaan painalluksista. Laskettu paikka kelpaa
     // vain tuoreena: kosketuslevy ja Kaukon napit nollaavat sen heti (fokus seuraa osoitinta), TV:n oma
     // kaukosäädin vasta netflixTuoreus-ajan jälkeen. Tauon jälkeen kuva tarkistaa paikan.
-    private enum NetflixOp { case tyhjenna, poista, kirjain(Character) }
+    private enum NetflixOp { case avaa, tuloksiin, tyhjenna, poista, kirjain(Character) }
     private var netflixJono: [NetflixOp] = []
     private var netflixPaikka: NetflixRuudukko.Paikka?
     private var netflixAika = Date.distantPast // milloin paikka viimeksi laskettiin tai nähtiin
@@ -244,6 +266,18 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func netflixPoista() {
         netflixKasin = true
         netflixJono.append(.poista)
+        netflixKaynnista()
+    }
+
+    // Hakukentän fokus: Netflixin haku auki TV:llä (suurennuslasi), jotta näppäimistö on valmiina.
+    func netflixAvaaHaku() {
+        netflixJono.append(.avaa)
+        netflixKaynnista()
+    }
+
+    // Enter: fokus näppäimistöltä hakutuloksiin (oikealle näppäimistön ohi).
+    func netflixTuloksiin() {
+        netflixJono.append(.tuloksiin)
         netflixKaynnista()
     }
 
@@ -277,11 +311,31 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                         paikka = try await netflixTyhjenna()
                         continue
                     }
+                    if case .avaa = op {
+                        try await netflixPaina(napit, paikka)
+                        napit = []
+                        try await netflixHakuAuki()
+                        paikka = nil
+                        continue
+                    }
                     if paikka == nil { paikka = try await netflixAnkkuroi().0 }
                     guard var p = paikka else { throw virhe("fokus ei löydy näppäimistöltä") }
                     switch op {
-                    case .tyhjenna:
+                    case .avaa, .tyhjenna:
                         break
+                    case .tuloksiin:
+                        // Ylärivistä alas (välilyönti → b, askelpalautin → e), sitten oikealle ruudukon ohi.
+                        var c = p.c
+                        if p.r == -1 {
+                            napit.append("DOWN")
+                            c = p == NetflixRuudukko.valilyonti ? 1 : 4
+                        }
+                        napit += Array(repeating: "RIGHT", count: 6 - c)
+                        try await netflixPaina(napit, nil)
+                        napit = []
+                        paikka = nil
+                        tila = "Netflix: valitse tulos kosketuslevyllä"
+                        continue
                     case .poista:
                         napit += NetflixRuudukko.siirry(p, NetflixRuudukko.askelpalautin) + ["ENTER"]
                         p = NetflixRuudukko.askelpalautin
@@ -294,7 +348,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                 }
                 try await netflixPaina(napit, paikka)
             }
-            tila = "Netflix: haku TV:llä"
+            if netflixPaikka != nil { tila = "Netflix: haku TV:llä" }
             netflixTarkistus = Task { await netflixTarkista() }
         } catch {
             netflixJono = []
@@ -327,19 +381,54 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     // Fokus näppäimistölle: kuva kertoo paikan; muuten nuolet ja uusi kuva (enintään kolme kierrosta).
     private func netflixAnkkuroi() async throws -> (NetflixRuudukko.Paikka, Bool) {
         var kuva = try await kuvakaappaus()
-        for kierros in 1...4 {
+        var avattu = false
+        for kierros in 1...5 {
             if case .nappain(let p) = kuva.tila { return (p, kuva.hakuteksti) }
-            guard kierros <= 3 else { break }
+            guard kierros <= 4 else { break }
             switch kuva.tila {
             case .nav: try await painele(["DOWN"], 0.15)
             case .genre: try await painele(["UP"], 0.15)
             case .hakunakyma: try await painele(Array(repeating: "LEFT", count: 6), 0.15)
-            default: throw virhe("avaa ensin Netflixin haku (suurennuslasi)")
+            default:
+                guard !avattu else { throw virhe("Netflixin haku ei auennut") }
+                avattu = true
+                try await netflixHakuAuki()
             }
             try await Task.sleep(nanoseconds: 400_000_000)
             kuva = try await kuvakaappaus()
         }
         throw virhe("fokus ei löydy näppäimistöltä")
+    }
+
+    // Suurennuslasi automaattisesti: hakunäkymän ulkopuolelta ylös yläpalkkiin (UP×8) ja vasemmalle,
+    // kunnes kuva näyttää fokuksen hakukuvakkeessa (tila nav), sitten OK. Haku on jo auki, jos kuva
+    // näyttää näppäimistön, genrelistan tai tulokset. Videon aikana LEFT kelaisi: vasemmalle enintään 6.
+    private func netflixHakuAuki() async throws {
+        var kuva = try await kuvakaappaus()
+        var ylhaalla = false, vasemmalle = 0
+        while true {
+            switch kuva.tila {
+            case .nappain, .genre, .hakunakyma:
+                return
+            case .nav:
+                try await painele(["ENTER"], 0.15)
+                try await Task.sleep(nanoseconds: 700_000_000)
+                if try await kuvakaappaus().tila == .muu { throw virhe("suurennuslasi ei avannut hakua") }
+                return
+            case .muu:
+                if !ylhaalla {
+                    tila = "Netflix: avataan haku…"
+                    try await painele(Array(repeating: "UP", count: 8), 0.12)
+                    ylhaalla = true
+                } else {
+                    guard vasemmalle < 6 else { throw virhe("Netflixin suurennuslasia ei löytynyt") }
+                    try await painele(["LEFT"], 0.2)
+                    vasemmalle += 1
+                }
+            }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            kuva = try await kuvakaappaus()
+        }
     }
 
     // Koko kenttä tyhjäksi: paikka ja teksti kuvasta (myös teksti, jota Kauko ei kirjoittanut),
@@ -365,7 +454,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         throw virhe("hakukenttä ei tyhjentynyt")
     }
 
-    private func virhe(_ viesti: String) -> NSError {
+    func virhe(_ viesti: String) -> NSError {
         NSError(domain: "LGTV", code: 3, userInfo: [NSLocalizedDescriptionKey: viesti])
     }
 
@@ -400,6 +489,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         valmis = false
         nappaimisto = false
         netflix = false
+        etuala = nil
         netflixPaikka = nil
         netflixJono = []
         netflixKasin = false
@@ -464,129 +554,48 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     }
 }
 
-struct KosketuslevyView: View {
-    @Environment(\.dismiss) private var dismiss
-    @Environment(\.scenePhase) private var scenePhase
-    @StateObject private var tv = LGTV()
+// Kosketuslevy ja sen oikean reunan vierityspalkki: liu'utus liikuttaa kursoria, napautus valitsee.
+struct Kosketusalue: View {
+    @ObservedObject var tv: LGTV
     @State private var edellinen: CGSize = .zero
     @State private var vierEdellinen: CGFloat = 0
-    @State private var syote = syoteAlku
-    @State private var netflixTeksti = syoteAlku
-    @FocusState private var syoteFokus: Bool
     private let herkkyys = 1.6
 
     var body: some View {
-        VStack(spacing: 12) {
-            HStack {
-                Text("TV-kosketuslevy").font(.title2.bold())
-                Spacer()
-                Button("Valmis") { dismiss() }.font(.headline)
-            }
-            if tv.nappaimisto {
-                TextField("", text: Binding(get: { syote }, set: { uusi in
-                    tv.syota(vanha: syote, uusi: uusi)
-                    syote = uusi.isEmpty ? syoteAlku : uusi
-                }))
-                .focused($syoteFokus)
-                .autocorrectionDisabled()
-                .textInputAutocapitalization(.never)
-                .submitLabel(.go)
-                .onSubmit { tv.enter(); syote = syoteAlku }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor))
-            }
-            if tv.netflix && !tv.nappaimisto {
-                // Kuten TV-kentässä: näkymätön alkumerkki, jotta askelpalautin tyhjässä kentässä poistaa
-                // merkin TV:n hakukentästä; nappi tyhjentää koko TV:n kentän.
-                HStack {
-                    TextField("", text: Binding(get: { netflixTeksti }, set: { uusi in
-                        if uusi.isEmpty && NetflixRuudukko.normalisoi(netflixTeksti).isEmpty {
-                            tv.netflixPoista()
-                        } else {
-                            tv.netflixSyota(vanha: netflixTeksti, uusi: uusi)
+        HStack(spacing: 10) {
+            RoundedRectangle(cornerRadius: 20, style: .continuous)
+                .fill(Color(.secondarySystemFill))
+                .overlay(Text(tv.valmis ? "Liu'uta: kursori · napauta: valitse" : tv.tila)
+                    .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding())
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        let d = CGSize(width: g.translation.width - edellinen.width,
+                                       height: g.translation.height - edellinen.height)
+                        edellinen = g.translation
+                        if tv.valmis { tv.liiku(d.width * herkkyys, d.height * herkkyys) } else { Task { await tv.yhdista() } }
+                    }
+                    .onEnded { g in
+                        edellinen = .zero
+                        if abs(g.translation.width) < 6 && abs(g.translation.height) < 6 {
+                            UIImpactFeedbackGenerator(style: .light).impactOccurred()
+                            tv.klikkaa()
                         }
-                        netflixTeksti = uusi.isEmpty ? syoteAlku : uusi
-                    }))
-                    .autocorrectionDisabled()
-                    .textInputAutocapitalization(.never)
-                    .submitLabel(.search)
-                    .overlay(alignment: .leading) {
-                        if netflixTeksti == syoteAlku {
-                            Text("Hae Netflixistä").foregroundStyle(.secondary).allowsHitTesting(false)
+                    })
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color(.tertiarySystemFill))
+                .frame(width: 54)
+                .overlay(Image(systemName: "arrow.up.and.down").foregroundStyle(.secondary))
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { g in
+                        let d = g.translation.height - vierEdellinen
+                        if abs(d) >= 12 {
+                            tv.vieritä(d > 0 ? -1 : 1)
+                            vierEdellinen = g.translation.height
                         }
                     }
-                    Button {
-                        netflixTeksti = syoteAlku
-                        tv.netflixTyhjennaKentta()
-                    } label: {
-                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
-                    }
-                    .accessibilityLabel("Tyhjennä TV:n hakukenttä")
-                }
-                .padding(10)
-                .background(RoundedRectangle(cornerRadius: 10).stroke(Color.red))
-            }
-            HStack(spacing: 10) {
-                RoundedRectangle(cornerRadius: 20)
-                    .fill(Color.secondary.opacity(0.18))
-                    .overlay(Text(tv.valmis ? "Liu'uta: kursori · napauta: valitse" : tv.tila)
-                        .font(.footnote).foregroundStyle(.secondary).multilineTextAlignment(.center).padding())
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { g in
-                            let d = CGSize(width: g.translation.width - edellinen.width,
-                                           height: g.translation.height - edellinen.height)
-                            edellinen = g.translation
-                            if tv.valmis { tv.liiku(d.width * herkkyys, d.height * herkkyys) } else { Task { await tv.yhdista() } }
-                        }
-                        .onEnded { g in
-                            edellinen = .zero
-                            if abs(g.translation.width) < 6 && abs(g.translation.height) < 6 {
-                                UIImpactFeedbackGenerator(style: .light).impactOccurred()
-                                tv.klikkaa()
-                            }
-                        })
-                RoundedRectangle(cornerRadius: 14)
-                    .fill(Color.secondary.opacity(0.28))
-                    .frame(width: 54)
-                    .overlay(Image(systemName: "arrow.up.and.down").foregroundStyle(.secondary))
-                    .contentShape(Rectangle())
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { g in
-                            let d = g.translation.height - vierEdellinen
-                            if abs(d) >= 12 {
-                                tv.vieritä(d > 0 ? -1 : 1)
-                                vierEdellinen = g.translation.height
-                            }
-                        }
-                        .onEnded { _ in vierEdellinen = 0 })
-            }
-            HStack(spacing: 10) {
-                nappi("Takaisin", "BACK")
-                nappi("Koti", "HOME")
-                nappi("OK", "ENTER")
-            }
-            Text(tv.tila).font(.footnote).monospacedDigit().lineLimit(2)
+                    .onEnded { _ in vierEdellinen = 0 })
         }
-        .padding()
-        .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
-        .onChange(of: tv.nappaimisto) { _, auki in
-            syote = syoteAlku
-            syoteFokus = auki
-        }
-        .onChange(of: scenePhase, initial: true) { _, phase in
-            if phase == .active { Task { await tv.yhdista() } } else if phase == .background { tv.katkaise() }
-        }
-        .onDisappear { tv.katkaise() }
-    }
-
-    func nappi(_ label: String, _ nimi: String) -> some View {
-        Button {
-            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            tv.nappi(nimi)
-        } label: {
-            Text(label).font(.headline).frame(maxWidth: .infinity, minHeight: 52)
-        }
-        .buttonStyle(.borderedProminent)
     }
 }
