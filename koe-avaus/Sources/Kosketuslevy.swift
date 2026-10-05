@@ -215,50 +215,112 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    // Kirjoittaa haun Netflixin ruudukolla. OK (ENTER) lähtee vain, kun kuva näyttää fokuksen
-    // näppäimistöllä; muuten fokus palautetaan nuolilla (enintään kolme kierrosta) tai haku keskeytetään.
-    func netflixHaku(_ syote: String) async {
-        let teksti = NetflixRuudukko.normalisoi(syote)
-        guard !teksti.isEmpty, !hakee else { return }
-        if !valmis { await yhdista() }
-        guard valmis else { return }
+    // Kirjoittaa haun Netflixin ruudukolla sitä mukaa kuin kenttään kirjoitetaan: muutokset jonoon,
+    // yksi työ purkaa jonon. OK (ENTER) lähtee vain, kun fokuksen paikka on tiedossa: ensimmäisellä
+    // merkillä se luetaan kuvasta (ja fokus palautetaan nuolilla), sen jälkeen lasketaan painalluksista.
+    // Tauon jälkeen kuva tarkistaa paikan; ristiriita → seuraava merkki ankkuroi uudelleen.
+    private enum NetflixOp { case tyhjenna, poista, kirjain(Character) }
+    private var netflixJono: [NetflixOp] = []
+    private var netflixPaikka: NetflixRuudukko.Paikka?
+    private var netflixTyo: Task<Void, Never>?
+    private var netflixTarkistus: Task<Void, Never>?
+
+    func netflixSyota(vanha: String, uusi: String) {
+        let v = NetflixRuudukko.normalisoi(vanha), u = NetflixRuudukko.normalisoi(uusi)
+        guard v != u else { return }
+        if v.isEmpty { netflixJono.append(.tyhjenna) }
+        let yhteinen = zip(v, u).prefix { $0 == $1 }.count
+        netflixJono += Array(repeating: .poista, count: v.count - yhteinen)
+        netflixJono += u.dropFirst(yhteinen).map { .kirjain($0) }
+        netflixTarkistus?.cancel()
+        if netflixTyo == nil { netflixTyo = Task { await netflixAja() } }
+    }
+
+    private func netflixAja() async {
         hakee = true
-        defer { hakee = false }
-        let t0 = Date()
+        defer { hakee = false; netflixTyo = nil }
         do {
-            var kuva = try await kuvakaappaus()
-            for kierros in 1...4 {
-                if case .nappain = kuva.tila { break }
-                guard kierros <= 3 else { throw virhe("fokus ei löydy näppäimistöltä") }
-                switch kuva.tila {
-                case .nav: try await painele(["DOWN"], 0.15)
-                case .genre: try await painele(["UP"], 0.15)
-                case .hakunakyma: try await painele(Array(repeating: "LEFT", count: 6), 0.15)
-                default: throw virhe("avaa ensin Netflixin haku (suurennuslasi)")
+            if !valmis { await yhdista() }
+            guard valmis else { throw virhe("ei yhteyttä TV:hen") }
+            while !netflixJono.isEmpty {
+                var paikka: NetflixRuudukko.Paikka
+                if let p = netflixPaikka {
+                    paikka = p
+                } else {
+                    let (p, teksti) = try await netflixAnkkuroi()
+                    paikka = p
+                    // Uusi haku: TV:n kenttä tyhjennetään, jos siinä on tekstiä.
+                    if case .tyhjenna = netflixJono.first, teksti { paikka = try await netflixTyhjenna(p) }
                 }
-                try await Task.sleep(nanoseconds: 400_000_000)
-                kuva = try await kuvakaappaus()
+                let jono = netflixJono
+                netflixJono = []
+                var napit: [String] = []
+                for op in jono {
+                    switch op {
+                    case .tyhjenna:
+                        continue
+                    case .poista:
+                        napit += NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin) + ["ENTER"]
+                        paikka = NetflixRuudukko.askelpalautin
+                    case .kirjain(let ch):
+                        let (n, loppu) = NetflixRuudukko.painallukset(String(ch), alku: paikka)
+                        napit += n
+                        paikka = loppu
+                    }
+                }
+                netflixPaikka = nil // kesken painallusten paikka ei ole varma
+                try await painele(napit, netflixViive)
+                netflixPaikka = paikka
             }
-            guard case .nappain(var paikka) = kuva.tila else { return }
-            for kierros in 1...4 where kuva.hakuteksti {
-                guard kierros <= 3 else { throw virhe("hakukenttä ei tyhjentynyt") }
-                let tyhjennys = NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin)
-                    + Array(repeating: "ENTER", count: 20)
-                try await painele(tyhjennys, netflixViive)
-                paikka = NetflixRuudukko.askelpalautin
-                try await Task.sleep(nanoseconds: 500_000_000)
-                kuva = try await kuvakaappaus()
-                guard kuva.tila == .nappain(paikka) else { throw virhe("fokus karkasi tyhjennyksessä") }
-            }
-            let (napit, loppu) = NetflixRuudukko.painallukset(teksti, alku: paikka)
-            try await painele(napit, netflixViive)
-            let kesto = String(format: "%.1f", Date().timeIntervalSince(t0))
-            tila = "Netflix: \"\(teksti)\" \(kesto) s"
-            try await Task.sleep(nanoseconds: 800_000_000)
-            if try await kuvakaappaus().tila != .nappain(loppu) { tila += " — tarkista TV:n hakukenttä" }
+            tila = "Netflix: haku TV:llä"
+            netflixTarkistus = Task { await netflixTarkista() }
         } catch {
+            netflixJono = []
+            netflixPaikka = nil
             tila = "Netflix-haku: \(error.localizedDescription)"
         }
+    }
+
+    private func netflixTarkista() async {
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        guard !Task.isCancelled, netflixTyo == nil, let odotettu = netflixPaikka,
+              let kuva = try? await kuvakaappaus(), !Task.isCancelled, netflixTyo == nil else { return }
+        if kuva.tila != .nappain(odotettu) {
+            netflixPaikka = nil
+            tila = "Netflix: fokus siirtyi — tarkista TV:n hakukenttä"
+        }
+    }
+
+    // Fokus näppäimistölle: kuva kertoo paikan; muuten nuolet ja uusi kuva (enintään kolme kierrosta).
+    private func netflixAnkkuroi() async throws -> (NetflixRuudukko.Paikka, Bool) {
+        var kuva = try await kuvakaappaus()
+        for kierros in 1...4 {
+            if case .nappain(let p) = kuva.tila { return (p, kuva.hakuteksti) }
+            guard kierros <= 3 else { break }
+            switch kuva.tila {
+            case .nav: try await painele(["DOWN"], 0.15)
+            case .genre: try await painele(["UP"], 0.15)
+            case .hakunakyma: try await painele(Array(repeating: "LEFT", count: 6), 0.15)
+            default: throw virhe("avaa ensin Netflixin haku (suurennuslasi)")
+            }
+            try await Task.sleep(nanoseconds: 400_000_000)
+            kuva = try await kuvakaappaus()
+        }
+        throw virhe("fokus ei löydy näppäimistöltä")
+    }
+
+    private func netflixTyhjenna(_ alku: NetflixRuudukko.Paikka) async throws -> NetflixRuudukko.Paikka {
+        var paikka = alku
+        for _ in 1...3 {
+            try await painele(NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin)
+                + Array(repeating: "ENTER", count: 20), netflixViive)
+            paikka = NetflixRuudukko.askelpalautin
+            try await Task.sleep(nanoseconds: 500_000_000)
+            let kuva = try await kuvakaappaus()
+            guard kuva.tila == .nappain(paikka) else { throw virhe("fokus karkasi tyhjennyksessä") }
+            if !kuva.hakuteksti { return paikka }
+        }
+        throw virhe("hakukenttä ei tyhjentynyt")
     }
 
     private func virhe(_ viesti: String) -> NSError {
@@ -296,6 +358,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         valmis = false
         nappaimisto = false
         netflix = false
+        netflixPaikka = nil
+        netflixJono = []
         let kesken = odottavat
         odottavat = [:]
         for jatko in kesken.values { jatko.resume(throwing: virhe("yhteys katkesi")) }
@@ -392,8 +456,7 @@ struct KosketuslevyView: View {
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.search)
-                    .onSubmit { let t = netflixTeksti; Task { await tv.netflixHaku(t) } }
-                    .disabled(tv.hakee)
+                    .onChange(of: netflixTeksti) { vanha, uusi in tv.netflixSyota(vanha: vanha, uusi: uusi) }
                     .padding(10)
                     .background(RoundedRectangle(cornerRadius: 10).stroke(Color.red))
             }
