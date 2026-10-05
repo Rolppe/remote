@@ -1,5 +1,8 @@
 import SwiftUI
+import UIKit
 import Darwin
+
+let baseURL = "http://192.0.2.10:8090"
 
 func processStartMs() -> Double {
     var info = kinfo_proc()
@@ -18,41 +21,84 @@ struct RemoteKoeApp: App {
 }
 
 struct ContentView: View {
-    @State private var launchMs: Int?
-    @State private var result = "–"
-    @State private var rttMs: Int?
-    @State private var started = false
+    @Environment(\.scenePhase) private var scenePhase
+    @State private var status = "–"
+    @State private var firstActive = true
 
     var body: some View {
-        VStack(spacing: 24) {
-            Text(launchMs.map { "\($0) ms" } ?? "…")
-                .font(.system(size: 64, weight: .bold))
+        VStack(spacing: 12) {
+            Text("Kauko").font(.largeTitle.bold())
+            ScrollView {
+                VStack(alignment: .leading, spacing: 10) {
+                    section("Vahvistin")
+                    big("Päälle", "amp_paalle")
+                    big("Pois", "amp_pois")
+                    big("Mykistys", "amp_mykistys")
+                    section("Lähde")
+                    big("Optical", "amp_optical")
+                    big("Phono", "amp_phono")
+                    section("Ääni")
+                    HStack(spacing: 10) {
+                        big("−", "aani_alas")
+                        big("+", "aani_ylos")
+                    }
+                    section("TV")
+                    big("Päälle", "lg_paalle")
+                    big("Pois", "lg_pois")
+                }
+            }
+            Text(status)
+                .font(.footnote)
                 .monospacedDigit()
-            Text(result)
-            Text(rttMs.map { "RTT \($0) ms" } ?? "")
-            Button("Ping uudelleen") { Task { await ping(launch: 0) } }
+                .lineLimit(2)
         }
-        .padding()
-        .onAppear {
-            guard !started else { return }
-            started = true
-            let ms = Int(Date().timeIntervalSince1970 * 1000 - processStartMs())
-            launchMs = ms
-            Task { await ping(launch: ms) }
+        .padding(.horizontal)
+        .onChange(of: scenePhase, initial: true) { _, phase in
+            guard phase == .active else { return }
+            var launch = 0
+            if firstActive {
+                firstActive = false
+                launch = Int(Date().timeIntervalSince1970 * 1000 - processStartMs())
+            }
+            Task { await warmUp(launch: launch) }
         }
     }
 
-    func ping(launch: Int) async {
-        let now = Int(Date().timeIntervalSince1970 * 1000)
-        guard let url = URL(string: "http://192.0.2.10:8090/ping?launch_ms=\(launch)&t=\(now)") else { return }
-        let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
+    func section(_ title: String) -> some View {
+        Text(title).font(.headline).padding(.top, 4)
+    }
+
+    func big(_ label: String, _ nimi: String) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            Task { await send(label: label, nimi: nimi) }
+        } label: {
+            Text(label)
+                .font(.title2.bold())
+                .frame(maxWidth: .infinity, minHeight: 64)
+        }
+        .buttonStyle(.borderedProminent)
+    }
+
+    func send(label: String, nimi: String) async {
+        guard let url = URL(string: baseURL + "/k/" + nimi) else { return }
+        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
+        req.httpMethod = "POST"
         let t0 = Date()
         do {
             let (_, resp) = try await URLSession.shared.data(for: req)
-            result = "HTTP \((resp as? HTTPURLResponse)?.statusCode ?? -1)"
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+            let rtt = Int(Date().timeIntervalSince(t0) * 1000)
+            status = code == 200 ? "\(label): OK \(rtt) ms" : "\(label): HTTP \(code)"
         } catch {
-            result = error.localizedDescription
+            status = "\(label): \(error.localizedDescription)"
         }
-        rttMs = Int(Date().timeIntervalSince(t0) * 1000)
+    }
+
+    func warmUp(launch: Int) async {
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        guard let url = URL(string: baseURL + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)") else { return }
+        let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
+        _ = try? await URLSession.shared.data(for: req)
     }
 }
