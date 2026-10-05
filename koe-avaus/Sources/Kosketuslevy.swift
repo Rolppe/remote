@@ -5,6 +5,11 @@ import UIKit
 // pääyhteys wss://<tv>:3001 → register → getPointerInputSocket → toinen websocket, johon
 // liikkeet menevät tekstiviesteinä ("type:move\ndx:..\ndy:..\ndown:0\n\n"). Sama protokolla
 // toimii Androidilla tavallisella websocket-kirjastolla (VAATIMUS: REMOTE-ANDROID).
+// Tekstinsyöttö (REMOTE-TV-SYOTTO): pääyhteys tilaa ssap://com.webos.service.ime/registerRemoteKeyboard;
+// kun TV:n tekstikenttä saa fokuksen, puhelimen näppäimistö aukeaa ja muutokset menevät
+// insertText/deleteCharacters/sendEnterKey-pyyntöinä.
+
+private let syoteAlku = "\u{200B}" // näkymätön merkki: puhelimen askelpalautin poistaa merkkejä myös TV:ltä
 
 let tvHost = "192.0.2.10"
 private let avainKey = "lgtv_client_key"
@@ -49,6 +54,7 @@ private func manifest() -> [String: Any] {
 final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var tila = "Ei yhteyttä"
     @Published var valmis = false
+    @Published var nappaimisto = false
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
@@ -56,6 +62,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var odotusDx = 0.0, odotusDy = 0.0
     private var lahettaa = false
     private var yhdistaa = false
+    private var pyyntoNro = 0
 
     override init() {
         super.init()
@@ -113,6 +120,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             let o = session.webSocketTask(with: url)
             o.resume()
             osoitin = o
+            try await laheta(ws, ["type": "subscribe", "id": "ime",
+                                  "uri": "ssap://com.webos.service.ime/registerRemoteKeyboard"])
             valmis = true
             tila = "Yhdistetty \(Int(Date().timeIntervalSince(t0) * 1000)) ms"
             kuuntele(ws)
@@ -127,8 +136,42 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         ws.receive { [weak self] tulos in
             Task { @MainActor in
                 guard let self, ws === self.paa else { return }
-                if case .failure = tulos { self.katkaise(); self.tila = "Yhteys katkesi" } else { self.kuuntele(ws) }
+                switch tulos {
+                case .failure: self.katkaise(); self.tila = "Yhteys katkesi"
+                case .success(let viesti): self.kasittele(viesti); self.kuuntele(ws)
+                }
             }
+        }
+    }
+
+    private func kasittele(_ viesti: URLSessionWebSocketTask.Message) {
+        guard case .string(let s) = viesti,
+              let v = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any],
+              v["id"] as? String == "ime",
+              let widget = (v["payload"] as? [String: Any])?["currentWidget"] as? [String: Any] else { return }
+        nappaimisto = widget["focus"] as? Bool ?? false
+    }
+
+    // Puhelimen kentän muutos TV:lle: yhteisen alun jälkeinen osa poistetaan ja uusi kirjoitetaan.
+    func syota(vanha: String, uusi: String) {
+        let yhteinen = zip(vanha, uusi).prefix { $0 == $1 }.count
+        let poistettavat = vanha.count - yhteinen
+        if poistettavat > 0 { ime("deleteCharacters", ["count": poistettavat]) }
+        let lisattava = String(uusi.dropFirst(yhteinen))
+        if !lisattava.isEmpty { ime("insertText", ["text": lisattava, "replace": 0]) }
+    }
+
+    func enter() { ime("sendEnterKey", [:]) }
+
+    private func ime(_ metodi: String, _ payload: [String: Any]) {
+        guard let ws = paa else { return }
+        pyyntoNro += 1
+        let viesti: [String: Any] = ["type": "request", "id": "ime\(pyyntoNro)",
+                                     "uri": "ssap://com.webos.service.ime/\(metodi)", "payload": payload]
+        guard let data = try? JSONSerialization.data(withJSONObject: viesti) else { return }
+        ws.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] virhe in
+            guard virhe != nil else { return }
+            Task { @MainActor in self?.katkaise(); self?.tila = "Yhteys katkesi" }
         }
     }
 
@@ -138,6 +181,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         osoitin = nil
         paa = nil
         valmis = false
+        nappaimisto = false
         lahettaa = false
         odotusDx = 0
         odotusDy = 0
@@ -201,6 +245,8 @@ struct KosketuslevyView: View {
     @StateObject private var tv = LGTV()
     @State private var edellinen: CGSize = .zero
     @State private var vierEdellinen: CGFloat = 0
+    @State private var syote = syoteAlku
+    @FocusState private var syoteFokus: Bool
     private let herkkyys = 1.6
 
     var body: some View {
@@ -209,6 +255,19 @@ struct KosketuslevyView: View {
                 Text("TV-kosketuslevy").font(.title2.bold())
                 Spacer()
                 Button("Valmis") { dismiss() }.font(.headline)
+            }
+            if tv.nappaimisto {
+                TextField("", text: Binding(get: { syote }, set: { uusi in
+                    tv.syota(vanha: syote, uusi: uusi)
+                    syote = uusi.isEmpty ? syoteAlku : uusi
+                }))
+                .focused($syoteFokus)
+                .autocorrectionDisabled()
+                .textInputAutocapitalization(.never)
+                .submitLabel(.go)
+                .onSubmit { tv.enter(); syote = syoteAlku }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor))
             }
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 20)
@@ -253,6 +312,11 @@ struct KosketuslevyView: View {
             Text(tv.tila).font(.footnote).monospacedDigit().lineLimit(2)
         }
         .padding()
+        .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
+        .onChange(of: tv.nappaimisto) { _, auki in
+            syote = syoteAlku
+            syoteFokus = auki
+        }
         .onChange(of: scenePhase, initial: true) { _, phase in
             if phase == .active { Task { await tv.yhdista() } } else if phase == .background { tv.katkaise() }
         }
