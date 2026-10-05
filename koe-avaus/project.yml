@@ -1,0 +1,42 @@
+name: RemoteKoe
+options:
+  deploymentTarget:
+    iOS: "18.0"
+settings:
+  base:
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID
+    CODE_SIGN_STYLE: Automatic
+targets:
+  RemoteKoe:
+    type: application
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [Sources, Shared]
+    dependencies:
+      - target: KaukoControl
+        embed: true
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.remote
+    info:
+      path: Info.plist
+      properties:
+        CFBundleDisplayName: Kauko
+        UILaunchScreen: {}
+        NSLocalNetworkUsageDescription: Sovellus lähettää komentoja kotiverkon palvelimelle.
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
+  KaukoControl:
+    type: app-extension
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [Control, Shared]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.remote.control
+    info:
+      path: Control/Info.plist
+      properties:
+        CFBundleDisplayName: Kauko
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
