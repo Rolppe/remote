@@ -11,7 +11,7 @@ targets:
     type: application
     platform: iOS
     deploymentTarget: "18.0"
-    sources: [Sources, Shared]
+    sources: [Sources, Shared, Resources]
     dependencies:
       - target: KaukoControl
         embed: true
