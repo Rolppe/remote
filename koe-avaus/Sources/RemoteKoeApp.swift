@@ -39,6 +39,7 @@ struct ContentView: View {
     @Environment(\.scenePhase) private var scenePhase
     @State private var status = "–"
     @State private var firstActive = true
+    @State private var kosketuslevy = false
 
     var body: some View {
         VStack(spacing: 12) {
@@ -60,6 +61,15 @@ struct ContentView: View {
                     section("TV")
                     big("Päälle", "lg_paalle")
                     big("Pois", "lg_pois")
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        kosketuslevy = true
+                    } label: {
+                        Text("Kosketuslevy")
+                            .font(.title2.bold())
+                            .frame(maxWidth: .infinity, minHeight: 64)
+                    }
+                    .buttonStyle(.bordered)
                 }
             }
             Text(status)
@@ -68,6 +78,7 @@ struct ContentView: View {
                 .lineLimit(2)
         }
         .padding(.horizontal)
+        .fullScreenCover(isPresented: $kosketuslevy) { KosketuslevyView() }
         .onChange(of: scenePhase, initial: true) { _, phase in
             guard phase == .active else { return }
             var launch = 0
