@@ -226,16 +226,16 @@ private struct PhonoKuvake: View {
 struct AloitusView: View {
     let avaa: (Palvelu) -> Void
     @Binding var laitteet: Bool
-    private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 16), count: 3)
+    private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4) // 4×2-ruudukko
 
     var body: some View {
         ScrollView {
             LazyVGrid(columns: sarakkeet, spacing: 28) {
                 ForEach(Palvelu.allCases) { p in
                     Button { avaa(p) } label: {
-                        VStack(spacing: 8) {
-                            PalveluKuvake(palvelu: p, koko: 76)
-                            Text(p.nimi).font(.footnote).foregroundStyle(.primary).lineLimit(1)
+                        VStack(spacing: 6) {
+                            PalveluKuvake(palvelu: p, koko: 64)
+                            Text(p.nimi).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
                         }
                     }
                     .buttonStyle(.plain)
