@@ -1,4 +1,5 @@
 import SwiftUI
+import ImageIO
 import UIKit
 
 // LG C1:n kosketuslevy (REMOTE-TRACKPAD). Puhelin puhuu suoraan TV:lle webOS SSAP:lla:
@@ -8,6 +9,10 @@ import UIKit
 // Tekstinsyöttö (REMOTE-TV-SYOTTO): pääyhteys tilaa ssap://com.webos.service.ime/registerRemoteKeyboard;
 // kun TV:n tekstikenttä saa fokuksen, puhelimen näppäimistö aukeaa ja muutokset menevät
 // insertText/deleteCharacters/sendEnterKey-pyyntöinä.
+//
+// Netflix-haku (REMOTE-NETFLIX-HAKU): Netflix ei avaa TV:n näppäimistöä, joten kun se on etualalla,
+// Kauko näyttää oman hakukentän ja ohjaa Netflixin kirjainruudukkoa (NetflixHaku.swift). Fokus
+// luetaan TV:n kuvakaappauksesta (tv/executeOneShot, lupa CONTROL_TV_SCREEN).
 
 private let syoteAlku = "\u{200B}" // näkymätön merkki: puhelimen askelpalautin poistaa merkkejä myös TV:ltä
 
@@ -32,7 +37,7 @@ private func manifest() -> [String: Any] {
         "permissions": ["LAUNCH", "CONTROL_AUDIO", "CONTROL_DISPLAY", "CONTROL_INPUT_JOYSTICK",
                         "CONTROL_INPUT_MEDIA_PLAYBACK", "CONTROL_INPUT_TV", "CONTROL_POWER",
                         "READ_APP_STATUS", "READ_POWER_STATE", "CONTROL_INPUT_TEXT",
-                        "CONTROL_MOUSE_AND_KEYBOARD"],
+                        "CONTROL_MOUSE_AND_KEYBOARD", "CONTROL_TV_SCREEN", "READ_RUNNING_APPS"],
         "signatures": [["signature": manifestSignature, "signatureVersion": 1]],
         "signed": [
             "appId": "com.lge.test",
@@ -55,6 +60,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var tila = "Ei yhteyttä"
     @Published var valmis = false
     @Published var nappaimisto = false
+    @Published var netflix = false
+    @Published var hakee = false
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
@@ -63,6 +70,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var lahettaa = false
     private var yhdistaa = false
     private var pyyntoNro = 0
+    private var odottavat: [String: CheckedContinuation<[String: Any], Error>] = [:]
+    private let netflixViive = 0.05 // 40–80 ms ruudukon sisällä: 0/52 painallusta hukkui (5.10.2026)
 
     override init() {
         super.init()
@@ -122,6 +131,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             osoitin = o
             try await laheta(ws, ["type": "subscribe", "id": "ime",
                                   "uri": "ssap://com.webos.service.ime/registerRemoteKeyboard"])
+            try await laheta(ws, ["type": "subscribe", "id": "fg",
+                                  "uri": "ssap://com.webos.applicationManager/getForegroundAppInfo"])
             valmis = true
             tila = "Yhdistetty \(Int(Date().timeIntervalSince(t0) * 1000)) ms"
             kuuntele(ws)
@@ -147,9 +158,111 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func kasittele(_ viesti: URLSessionWebSocketTask.Message) {
         guard case .string(let s) = viesti,
               let v = try? JSONSerialization.jsonObject(with: Data(s.utf8)) as? [String: Any],
-              v["id"] as? String == "ime",
-              let widget = (v["payload"] as? [String: Any])?["currentWidget"] as? [String: Any] else { return }
-        nappaimisto = widget["focus"] as? Bool ?? false
+              let id = v["id"] as? String else { return }
+        if let jatko = odottavat.removeValue(forKey: id) {
+            if v["type"] as? String == "error" {
+                jatko.resume(throwing: virhe(v["error"] as? String ?? "TV hylkäsi pyynnön"))
+            } else {
+                jatko.resume(returning: v)
+            }
+            return
+        }
+        let payload = v["payload"] as? [String: Any]
+        if id == "ime", let widget = payload?["currentWidget"] as? [String: Any] {
+            nappaimisto = widget["focus"] as? Bool ?? false
+        } else if id == "fg", let appId = payload?["appId"] as? String {
+            netflix = appId == "netflix"
+        }
+    }
+
+    // Pyyntö, jonka vastaus odotetaan pääyhteydeltä (id:llä); aikakatkaisu ettei haku jää jumiin.
+    private func pyyda(_ uri: String, _ payload: [String: Any], aika: Double = 4) async throws -> [String: Any] {
+        guard let ws = paa else { throw virhe("ei yhteyttä") }
+        pyyntoNro += 1
+        let id = "q\(pyyntoNro)"
+        let data = try JSONSerialization.data(withJSONObject: ["type": "request", "id": id, "uri": uri,
+                                                               "payload": payload])
+        return try await withCheckedThrowingContinuation { jatko in
+            odottavat[id] = jatko
+            ws.send(.string(String(decoding: data, as: UTF8.self))) { [weak self] e in
+                guard let e else { return }
+                Task { @MainActor in self?.odottavat.removeValue(forKey: id)?.resume(throwing: e) }
+            }
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: UInt64(aika * 1_000_000_000))
+                self?.odottavat.removeValue(forKey: id)?.resume(throwing: virhe("TV ei vastannut"))
+            }
+        }
+    }
+
+    private func kuvakaappaus() async throws -> NetflixKuva {
+        let v = try await pyyda("ssap://tv/executeOneShot", ["path": "/tmp/capture.png", "method": "DISPLAY",
+                                                             "format": "PNG"])
+        guard let uri = (v["payload"] as? [String: Any])?["imageUri"] as? String,
+              let url = URL(string: uri) else { throw virhe("ei kuvakaappausta") }
+        let (data, _) = try await session.data(from: url)
+        guard let lahde = CGImageSourceCreateWithData(data as CFData, nil),
+              let kuva = CGImageSourceCreateImageAtIndex(lahde, 0, nil),
+              let pisteet = Kuvapisteet(kuva) else { throw virhe("kuvaa ei voi lukea") }
+        return NetflixRuudukko.tunnista(pisteet)
+    }
+
+    private func painele(_ napit: [String], _ viive: Double) async throws {
+        for n in napit {
+            guard osoitin != nil else { throw virhe("yhteys katkesi") }
+            nappi(n)
+            try await Task.sleep(nanoseconds: UInt64(viive * 1_000_000_000))
+        }
+    }
+
+    // Kirjoittaa haun Netflixin ruudukolla. OK (ENTER) lähtee vain, kun kuva näyttää fokuksen
+    // näppäimistöllä; muuten fokus palautetaan nuolilla (enintään kolme kierrosta) tai haku keskeytetään.
+    func netflixHaku(_ syote: String) async {
+        let teksti = NetflixRuudukko.normalisoi(syote)
+        guard !teksti.isEmpty, !hakee else { return }
+        if !valmis { await yhdista() }
+        guard valmis else { return }
+        hakee = true
+        defer { hakee = false }
+        let t0 = Date()
+        do {
+            var kuva = try await kuvakaappaus()
+            for kierros in 1...4 {
+                if case .nappain = kuva.tila { break }
+                guard kierros <= 3 else { throw virhe("fokus ei löydy näppäimistöltä") }
+                switch kuva.tila {
+                case .nav: try await painele(["DOWN"], 0.15)
+                case .genre: try await painele(["UP"], 0.15)
+                case .hakunakyma: try await painele(Array(repeating: "LEFT", count: 6), 0.15)
+                default: throw virhe("avaa ensin Netflixin haku (suurennuslasi)")
+                }
+                try await Task.sleep(nanoseconds: 400_000_000)
+                kuva = try await kuvakaappaus()
+            }
+            guard case .nappain(var paikka) = kuva.tila else { return }
+            for kierros in 1...4 where kuva.hakuteksti {
+                guard kierros <= 3 else { throw virhe("hakukenttä ei tyhjentynyt") }
+                let tyhjennys = NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin)
+                    + Array(repeating: "ENTER", count: 20)
+                try await painele(tyhjennys, netflixViive)
+                paikka = NetflixRuudukko.askelpalautin
+                try await Task.sleep(nanoseconds: 500_000_000)
+                kuva = try await kuvakaappaus()
+                guard kuva.tila == .nappain(paikka) else { throw virhe("fokus karkasi tyhjennyksessä") }
+            }
+            let (napit, loppu) = NetflixRuudukko.painallukset(teksti, alku: paikka)
+            try await painele(napit, netflixViive)
+            let kesto = String(format: "%.1f", Date().timeIntervalSince(t0))
+            tila = "Netflix: \"\(teksti)\" \(kesto) s"
+            try await Task.sleep(nanoseconds: 800_000_000)
+            if try await kuvakaappaus().tila != .nappain(loppu) { tila += " — tarkista TV:n hakukenttä" }
+        } catch {
+            tila = "Netflix-haku: \(error.localizedDescription)"
+        }
+    }
+
+    private func virhe(_ viesti: String) -> NSError {
+        NSError(domain: "LGTV", code: 3, userInfo: [NSLocalizedDescriptionKey: viesti])
     }
 
     // Puhelimen kentän muutos TV:lle: yhteisen alun jälkeinen osa poistetaan ja uusi kirjoitetaan.
@@ -182,6 +295,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         paa = nil
         valmis = false
         nappaimisto = false
+        netflix = false
+        let kesken = odottavat
+        odottavat = [:]
+        for jatko in kesken.values { jatko.resume(throwing: virhe("yhteys katkesi")) }
         lahettaa = false
         odotusDx = 0
         odotusDy = 0
@@ -246,6 +363,7 @@ struct KosketuslevyView: View {
     @State private var edellinen: CGSize = .zero
     @State private var vierEdellinen: CGFloat = 0
     @State private var syote = syoteAlku
+    @State private var netflixTeksti = ""
     @FocusState private var syoteFokus: Bool
     private let herkkyys = 1.6
 
@@ -268,6 +386,16 @@ struct KosketuslevyView: View {
                 .onSubmit { tv.enter(); syote = syoteAlku }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor))
+            }
+            if tv.netflix && !tv.nappaimisto {
+                TextField("Hae Netflixistä", text: $netflixTeksti)
+                    .autocorrectionDisabled()
+                    .textInputAutocapitalization(.never)
+                    .submitLabel(.search)
+                    .onSubmit { let t = netflixTeksti; Task { await tv.netflixHaku(t) } }
+                    .disabled(tv.hakee)
+                    .padding(10)
+                    .background(RoundedRectangle(cornerRadius: 10).stroke(Color.red))
             }
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 20)
