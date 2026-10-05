@@ -1,13 +1,14 @@
 import SwiftUI
 import UIKit
 
-// TV-sovelluksen ohjaus (REMOTE-ALOITUS): ylhäällä hakukenttä, keskellä napit, alakolmanneksella
-// kosketuslevy. Hakukentän fokus piilottaa kosketuslevyn puhelimen näppäimistön tieltä; Enter
+// TV-sovelluksen ohjaus (REMOTE-ALOITUS): napit, hakukenttä suoraan kosketuslevyn yläpuolella ja
+// alakolmanneksella kosketuslevy. Hakukentän fokus piilottaa kosketuslevyn puhelimen näppäimistön tieltä; Enter
 // sulkee näppäimistön ja kosketuslevy palaa. Netflixin haku ohjaa sen kirjainruudukkoa
 // (NetflixHaku.swift), muut sovellukset TV:n omaa tekstikenttää (IME), kun se on auki.
 struct TVOhjausView: View {
     let palvelu: Palvelu? // nil = pelkkä kosketuslevy (Laitteet-paneelista)
     @EnvironmentObject private var tv: LGTV
+    @Environment(\.dismiss) private var dismiss
     @State private var syote = syoteAlku
     @State private var netflixTeksti = syoteAlku
     @FocusState private var hakuFokus: Bool
@@ -23,12 +24,12 @@ struct TVOhjausView: View {
                     ProfiiliValinta(tv: tv)
                     Spacer()
                 } else {
-                    if palvelu != .liveTV { hakukentta }
                     if let k = tv.kaynnistys {
                         HStack(spacing: 8) { ProgressView(); Text(k).font(.subheadline) }
                     }
                     Spacer(minLength: 0)
                     napit
+                    if palvelu != .liveTV { hakukentta }
                     if !hakuFokus {
                         Kosketusalue(tv: tv).frame(height: geo.size.height / 3)
                     }
@@ -106,14 +107,14 @@ struct TVOhjausView: View {
         .padding(.horizontal, 10)
         .padding(.vertical, 9)
         .background(Color(.tertiarySystemFill), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
-        .padding(.top, 8)
     }
 
     @ViewBuilder private var napit: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
                 nappi("Takaisin", "arrow.uturn.backward", "BACK")
-                nappi("Koti", "house", "HOME")
+                // TV:n aloitusruutu ja Kaukon aloitussivu yhdessä: palvelun näkymä ei jää auki.
+                nappi("Koti", "house", "HOME") { dismiss() }
                 nappi("OK", "checkmark", "ENTER")
             }
             HStack(spacing: 10) {
@@ -130,10 +131,11 @@ struct TVOhjausView: View {
         }
     }
 
-    private func nappi(_ teksti: String?, _ kuva: String, _ nimi: String) -> some View {
+    private func nappi(_ teksti: String?, _ kuva: String, _ nimi: String, _ lisaksi: (() -> Void)? = nil) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             tv.nappi(nimi)
+            lisaksi?()
         } label: {
             Group {
                 if let teksti { Label(teksti, systemImage: kuva) } else { Image(systemName: kuva) }
@@ -220,10 +222,8 @@ struct PhonoView: View {
             Spacer()
             PalveluKuvake(palvelu: .phono, koko: 132)
             Text("Phono").font(.largeTitle.bold())
-            HStack(spacing: 12) {
-                nappi("Ääni −", "speaker.minus", "aani_alas")
-                nappi("Ääni +", "speaker.plus", "aani_ylos")
-            }
+            // Äänenvoimakkuus on puhelimen omissa napeissa (AaniNapit), joten näkymässä vain mykistys.
+            Text("Äänenvoimakkuus: puhelimen sivunapit").font(.subheadline).foregroundStyle(.secondary)
             nappi("Mykistys", "speaker.slash", "amp_mykistys")
             Spacer()
             Button(role: .destructive) {
