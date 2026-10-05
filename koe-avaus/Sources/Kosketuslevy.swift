@@ -172,6 +172,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             nappaimisto = widget["focus"] as? Bool ?? false
         } else if id == "fg", let appId = payload?["appId"] as? String {
             netflix = appId == "netflix"
+            if !netflix { netflixPaikka = nil; netflixKasin = false }
         }
     }
 
@@ -210,28 +211,50 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func painele(_ napit: [String], _ viive: Double) async throws {
         for n in napit {
             guard osoitin != nil else { throw virhe("yhteys katkesi") }
-            nappi(n)
+            osoitinViesti("type:button\nname:\(n)\n\n")
             try await Task.sleep(nanoseconds: UInt64(viive * 1_000_000_000))
         }
     }
 
     // Kirjoittaa haun Netflixin ruudukolla sitä mukaa kuin kenttään kirjoitetaan: muutokset jonoon,
-    // yksi työ purkaa jonon. OK (ENTER) lähtee vain, kun fokuksen paikka on tiedossa: ensimmäisellä
-    // merkillä se luetaan kuvasta (ja fokus palautetaan nuolilla), sen jälkeen lasketaan painalluksista.
-    // Tauon jälkeen kuva tarkistaa paikan; ristiriita → seuraava merkki ankkuroi uudelleen.
+    // yksi työ purkaa jonon. OK (ENTER) lähtee vain, kun fokuksen paikka on tiedossa: se luetaan kuvasta
+    // (ja fokus palautetaan nuolilla), ja sen jälkeen lasketaan painalluksista. Laskettu paikka kelpaa
+    // vain tuoreena: kosketuslevy ja Kaukon napit nollaavat sen heti (fokus seuraa osoitinta), TV:n oma
+    // kaukosäädin vasta netflixTuoreus-ajan jälkeen. Tauon jälkeen kuva tarkistaa paikan.
     private enum NetflixOp { case tyhjenna, poista, kirjain(Character) }
     private var netflixJono: [NetflixOp] = []
     private var netflixPaikka: NetflixRuudukko.Paikka?
+    private var netflixAika = Date.distantPast // milloin paikka viimeksi laskettiin tai nähtiin
+    private let netflixTuoreus = 5.0
+    private var netflixKasin = false // TV:n tekstiä poistettu tyhjästä kentästä: uusi haku ei tyhjennä
     private var netflixTyo: Task<Void, Never>?
     private var netflixTarkistus: Task<Void, Never>?
 
     func netflixSyota(vanha: String, uusi: String) {
         let v = NetflixRuudukko.normalisoi(vanha), u = NetflixRuudukko.normalisoi(uusi)
         guard v != u else { return }
-        if v.isEmpty { netflixJono.append(.tyhjenna) }
+        if v.isEmpty && !netflixKasin { netflixJono.append(.tyhjenna) }
         let yhteinen = zip(v, u).prefix { $0 == $1 }.count
         netflixJono += Array(repeating: .poista, count: v.count - yhteinen)
         netflixJono += u.dropFirst(yhteinen).map { .kirjain($0) }
+        netflixKaynnista()
+    }
+
+    // Askelpalautin tyhjässä kentässä: poistaa merkin TV:n kentästä (teksti, jota Kauko ei kirjoittanut).
+    func netflixPoista() {
+        netflixKasin = true
+        netflixJono.append(.poista)
+        netflixKaynnista()
+    }
+
+    // Tyhjennysnappi: koko TV:n hakukenttä tyhjäksi.
+    func netflixTyhjennaKentta() {
+        netflixKasin = false
+        netflixJono.append(.tyhjenna)
+        netflixKaynnista()
+    }
+
+    private func netflixKaynnista() {
         netflixTarkistus?.cancel()
         if netflixTyo == nil { netflixTyo = Task { await netflixAja() } }
     }
@@ -243,34 +266,33 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             if !valmis { await yhdista() }
             guard valmis else { throw virhe("ei yhteyttä TV:hen") }
             while !netflixJono.isEmpty {
-                var paikka: NetflixRuudukko.Paikka
-                if let p = netflixPaikka {
-                    paikka = p
-                } else {
-                    let (p, teksti) = try await netflixAnkkuroi()
-                    paikka = p
-                    // Uusi haku: TV:n kenttä tyhjennetään, jos siinä on tekstiä.
-                    if case .tyhjenna = netflixJono.first, teksti { paikka = try await netflixTyhjenna(p) }
-                }
                 let jono = netflixJono
                 netflixJono = []
+                var paikka = Date().timeIntervalSince(netflixAika) < netflixTuoreus ? netflixPaikka : nil
                 var napit: [String] = []
                 for op in jono {
+                    if case .tyhjenna = op {
+                        try await netflixPaina(napit, paikka)
+                        napit = []
+                        paikka = try await netflixTyhjenna()
+                        continue
+                    }
+                    if paikka == nil { paikka = try await netflixAnkkuroi().0 }
+                    guard var p = paikka else { throw virhe("fokus ei löydy näppäimistöltä") }
                     switch op {
                     case .tyhjenna:
-                        continue
+                        break
                     case .poista:
-                        napit += NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin) + ["ENTER"]
-                        paikka = NetflixRuudukko.askelpalautin
+                        napit += NetflixRuudukko.siirry(p, NetflixRuudukko.askelpalautin) + ["ENTER"]
+                        p = NetflixRuudukko.askelpalautin
                     case .kirjain(let ch):
-                        let (n, loppu) = NetflixRuudukko.painallukset(String(ch), alku: paikka)
+                        let (n, loppu) = NetflixRuudukko.painallukset(String(ch), alku: p)
                         napit += n
-                        paikka = loppu
+                        p = loppu
                     }
+                    paikka = p
                 }
-                netflixPaikka = nil // kesken painallusten paikka ei ole varma
-                try await painele(napit, netflixViive)
-                netflixPaikka = paikka
+                try await netflixPaina(napit, paikka)
             }
             tila = "Netflix: haku TV:llä"
             netflixTarkistus = Task { await netflixTarkista() }
@@ -281,6 +303,15 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
+    // Kesken painallusten paikka ei ole varma; valmiina se on laskettu loppupaikka.
+    private func netflixPaina(_ napit: [String], _ loppu: NetflixRuudukko.Paikka?) async throws {
+        guard !napit.isEmpty else { return }
+        netflixPaikka = nil
+        try await painele(napit, netflixViive)
+        netflixPaikka = loppu
+        netflixAika = Date()
+    }
+
     private func netflixTarkista() async {
         try? await Task.sleep(nanoseconds: 800_000_000)
         guard !Task.isCancelled, netflixTyo == nil, let odotettu = netflixPaikka,
@@ -288,6 +319,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         if kuva.tila != .nappain(odotettu) {
             netflixPaikka = nil
             tila = "Netflix: fokus siirtyi — tarkista TV:n hakukenttä"
+        } else {
+            netflixAika = Date()
         }
     }
 
@@ -309,16 +342,25 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         throw virhe("fokus ei löydy näppäimistöltä")
     }
 
-    private func netflixTyhjenna(_ alku: NetflixRuudukko.Paikka) async throws -> NetflixRuudukko.Paikka {
-        var paikka = alku
-        for _ in 1...3 {
+    // Koko kenttä tyhjäksi: paikka ja teksti kuvasta (myös teksti, jota Kauko ei kirjoittanut),
+    // sitten askelpalautin 20 kertaa kierroksessa, kunnes kuva näyttää tyhjän kentän.
+    private func netflixTyhjenna() async throws -> NetflixRuudukko.Paikka {
+        netflixPaikka = nil
+        var (paikka, teksti) = try await netflixAnkkuroi()
+        for kierros in 0...3 {
+            if !teksti {
+                netflixPaikka = paikka
+                netflixAika = Date()
+                return paikka
+            }
+            guard kierros < 3 else { break }
             try await painele(NetflixRuudukko.siirry(paikka, NetflixRuudukko.askelpalautin)
                 + Array(repeating: "ENTER", count: 20), netflixViive)
             paikka = NetflixRuudukko.askelpalautin
             try await Task.sleep(nanoseconds: 500_000_000)
             let kuva = try await kuvakaappaus()
             guard kuva.tila == .nappain(paikka) else { throw virhe("fokus karkasi tyhjennyksessä") }
-            if !kuva.hakuteksti { return paikka }
+            teksti = kuva.hakuteksti
         }
         throw virhe("hakukenttä ei tyhjentynyt")
     }
@@ -360,6 +402,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         netflix = false
         netflixPaikka = nil
         netflixJono = []
+        netflixKasin = false
         let kesken = odottavat
         odottavat = [:]
         for jatko in kesken.values { jatko.resume(throwing: virhe("yhteys katkesi")) }
@@ -370,6 +413,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
 
     // Liikkeet kasataan: kun edellinen lähetys on kesken, uudet siirtymät summautuvat seuraavaan.
     func liiku(_ dx: Double, _ dy: Double) {
+        netflixPaikka = nil // Netflixin fokus seuraa osoitinta
         odotusDx += dx
         odotusDy += dy
         tyhjenna()
@@ -391,9 +435,9 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    func klikkaa() { osoitinViesti("type:click\n\n") }
-    func vieritä(_ dy: Int) { osoitinViesti("type:scroll\ndx:0\ndy:\(dy)\n\n") }
-    func nappi(_ nimi: String) { osoitinViesti("type:button\nname:\(nimi)\n\n") }
+    func klikkaa() { netflixPaikka = nil; osoitinViesti("type:click\n\n") }
+    func vieritä(_ dy: Int) { netflixPaikka = nil; osoitinViesti("type:scroll\ndx:0\ndy:\(dy)\n\n") }
+    func nappi(_ nimi: String) { netflixPaikka = nil; osoitinViesti("type:button\nname:\(nimi)\n\n") }
 
     private func osoitinViesti(_ viesti: String) {
         guard let o = osoitin else { Task { await yhdista() }; return }
@@ -427,7 +471,7 @@ struct KosketuslevyView: View {
     @State private var edellinen: CGSize = .zero
     @State private var vierEdellinen: CGFloat = 0
     @State private var syote = syoteAlku
-    @State private var netflixTeksti = ""
+    @State private var netflixTeksti = syoteAlku
     @FocusState private var syoteFokus: Bool
     private let herkkyys = 1.6
 
@@ -452,13 +496,35 @@ struct KosketuslevyView: View {
                 .background(RoundedRectangle(cornerRadius: 10).stroke(Color.accentColor))
             }
             if tv.netflix && !tv.nappaimisto {
-                TextField("Hae Netflixistä", text: $netflixTeksti)
+                // Kuten TV-kentässä: näkymätön alkumerkki, jotta askelpalautin tyhjässä kentässä poistaa
+                // merkin TV:n hakukentästä; nappi tyhjentää koko TV:n kentän.
+                HStack {
+                    TextField("", text: Binding(get: { netflixTeksti }, set: { uusi in
+                        if uusi.isEmpty && NetflixRuudukko.normalisoi(netflixTeksti).isEmpty {
+                            tv.netflixPoista()
+                        } else {
+                            tv.netflixSyota(vanha: netflixTeksti, uusi: uusi)
+                        }
+                        netflixTeksti = uusi.isEmpty ? syoteAlku : uusi
+                    }))
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
                     .submitLabel(.search)
-                    .onChange(of: netflixTeksti) { vanha, uusi in tv.netflixSyota(vanha: vanha, uusi: uusi) }
-                    .padding(10)
-                    .background(RoundedRectangle(cornerRadius: 10).stroke(Color.red))
+                    .overlay(alignment: .leading) {
+                        if netflixTeksti == syoteAlku {
+                            Text("Hae Netflixistä").foregroundStyle(.secondary).allowsHitTesting(false)
+                        }
+                    }
+                    Button {
+                        netflixTeksti = syoteAlku
+                        tv.netflixTyhjennaKentta()
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
+                    }
+                    .accessibilityLabel("Tyhjennä TV:n hakukenttä")
+                }
+                .padding(10)
+                .background(RoundedRectangle(cornerRadius: 10).stroke(Color.red))
             }
             HStack(spacing: 10) {
                 RoundedRectangle(cornerRadius: 20)
