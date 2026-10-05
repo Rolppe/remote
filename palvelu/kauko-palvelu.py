@@ -112,6 +112,13 @@ class Kasittelija(BaseHTTPRequestHandler):
     do_DELETE = do_PATCH = do_HEAD = do_PUT
 
 
+class Palvelin(ThreadingHTTPServer):
+    def handle_error(self, request, client_address):
+        if isinstance(sys.exc_info()[1], (ConnectionResetError, BrokenPipeError, TimeoutError)):
+            return  # asiakas katkaisi (nollaus / jouten jäänyt keep-alive): ei tracebackia
+        super().handle_error(request, client_address)
+
+
 def tarkista():
     tulos = {}
     tulos["token"] = os.access(TOKEN_FILE, os.R_OK)
@@ -142,7 +149,7 @@ def main():
         fcntl.flock(lukko, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError:
         return 0
-    palvelin = ThreadingHTTPServer(("0.0.0.0", PORTTI), Kasittelija)
+    palvelin = Palvelin(("0.0.0.0", PORTTI), Kasittelija)
     print("%s kauko-palvelu käynnissä portissa %d (pid %d)" % (
         datetime.now().astimezone().isoformat(timespec="seconds"), PORTTI, os.getpid()), flush=True)
     try:
