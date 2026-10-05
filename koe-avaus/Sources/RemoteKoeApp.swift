@@ -13,6 +13,21 @@ func processStartMs() -> Double {
     return Double(tv.tv_sec) * 1000 + Double(tv.tv_usec) / 1000
 }
 
+// Varoitus, kun oman embedded.mobileprovisionin ExpirationDate on alle 3 vrk päässä.
+func allekirjoitusVaroitus() -> String? {
+    guard let url = Bundle.main.url(forResource: "embedded", withExtension: "mobileprovision"),
+          let data = try? Data(contentsOf: url),
+          let raw = String(data: data, encoding: .isoLatin1),
+          let a = raw.range(of: "<?xml"), let b = raw.range(of: "</plist>"),
+          let xml = String(raw[a.lowerBound..<b.upperBound]).data(using: .isoLatin1),
+          let plist = try? PropertyListSerialization.propertyList(from: xml, format: nil) as? [String: Any],
+          let exp = plist["ExpirationDate"] as? Date,
+          exp.timeIntervalSinceNow < 3 * 86400 else { return nil }
+    let f = DateFormatter()
+    f.dateFormat = "dd.MM. HH.mm"
+    return "Allekirjoitus vanhenee \(f.string(from: exp)) — avaa Macin näyttö"
+}
+
 @main
 struct RemoteKoeApp: App {
     var body: some Scene {
@@ -59,6 +74,7 @@ struct ContentView: View {
             if firstActive {
                 firstActive = false
                 launch = Int(Date().timeIntervalSince1970 * 1000 - processStartMs())
+                if let varoitus = allekirjoitusVaroitus() { status = varoitus }
             }
             Task { await warmUp(launch: launch) }
         }
