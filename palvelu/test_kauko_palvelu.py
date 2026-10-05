@@ -3,6 +3,7 @@ import http.client
 import json
 import os
 import socket
+import struct
 import subprocess
 import sys
 import tempfile
@@ -162,6 +163,18 @@ class KaukoPalveluTesti(unittest.TestCase):
         self.assertEqual((r.status, json.loads(r.read())["ok"]), (200, True))
         self.assertEqual(c.sock.getsockname(), paikallinen)
         c.close()
+
+    def test_yhteyden_nollaus_ei_lokita(self):
+        s = socket.create_connection(("127.0.0.1", self.portti), timeout=5)
+        s.sendall(b"GET /ping HTTP/1.1\r\nHost: x\r\n")
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+        s.close()
+        time.sleep(0.5)
+        self.loki.flush()
+        loki = self.loki.seek(0) or self.loki.read()
+        self.assertNotIn("Traceback", loki)
+        self.assertNotIn("ConnectionResetError", loki)
+        self.assertEqual(self.pyynto("GET", "/ping"), (200, "ok"))
 
     def test_zz_token_ei_vuoda(self):
         self.pyynto("POST", "/k/amp_pois")
