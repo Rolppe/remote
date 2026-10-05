@@ -1,6 +1,8 @@
 import SwiftUI
 import UIKit
 import Darwin
+import AVFoundation
+import MediaPlayer
 
 let baseURL = "http://192.0.2.10:8090"
 
@@ -26,6 +28,90 @@ func allekirjoitusVaroitus() -> String? {
     let f = DateFormatter()
     f.dateFormat = "dd.MM. HH.mm"
     return "Allekirjoitus vanhenee \(f.string(from: exp)) — avaa Macin näyttö"
+}
+
+func lahetaKomento(label: String, nimi: String) async -> String {
+    let now = Int(Date().timeIntervalSince1970 * 1000)
+    guard let url = URL(string: baseURL + "/k/" + nimi + "?t=\(now)") else { return "\(label): virheellinen osoite" }
+    var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
+    req.httpMethod = "POST"
+    let t0 = Date()
+    do {
+        let (_, resp) = try await URLSession.shared.data(for: req)
+        let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
+        let rtt = Int(Date().timeIntervalSince(t0) * 1000)
+        return code == 200 ? "\(label): OK \(rtt) ms" : "\(label): HTTP \(code)"
+    } catch {
+        return "\(label): \(error.localizedDescription)"
+    }
+}
+
+// Puhelimen äänenvoimakkuusnapit säätävät vahvistinta, kun Kauko on auki (REMOTE-TV-SYOTTO).
+// Napin painallus näkyy outputVolumen muutoksena (KVO); muutoksen suunta lähetetään aani_ylos/aani_alas,
+// ja taso palautetaan heti lähtöarvoon piilotetun MPVolumeView'n liukusäätimellä, jotta napit toimivat
+// myös ääripäissä. Näkymässä oleva MPVolumeView estää järjestelmän äänenvoimakkuusilmoituksen.
+@MainActor
+final class AaniNapit: ObservableObject {
+    static let shared = AaniNapit()
+    @Published var viesti = ""
+
+    private var havainto: NSKeyValueObservation?
+    private var taso: Float = 0.5
+    private let nakymat = NSHashTable<MPVolumeView>.weakObjects()
+
+    func liita(_ v: MPVolumeView) { nakymat.add(v) }
+
+    func kaynnista() {
+        guard havainto == nil else { return }
+        let istunto = AVAudioSession.sharedInstance()
+        try? istunto.setCategory(.ambient, options: [.mixWithOthers])
+        try? istunto.setActive(true)
+        taso = istunto.outputVolume
+        if taso < 0.05 || taso > 0.95 {
+            taso = 0.5
+            aseta(taso)
+        }
+        havainto = istunto.observe(\.outputVolume, options: [.new]) { [weak self] _, muutos in
+            guard let uusi = muutos.newValue else { return }
+            Task { @MainActor in self?.muuttui(uusi) }
+        }
+    }
+
+    func pysayta() {
+        havainto?.invalidate()
+        havainto = nil
+        try? AVAudioSession.sharedInstance().setActive(false, options: .notifyOthersOnDeactivation)
+    }
+
+    private func muuttui(_ uusi: Float) {
+        guard abs(uusi - taso) > 0.01 else { return } // oma palautus lähtötasolle
+        let ylos = uusi > taso
+        aseta(taso)
+        Task {
+            viesti = await lahetaKomento(label: ylos ? "Ääni +" : "Ääni −", nimi: ylos ? "aani_ylos" : "aani_alas")
+        }
+    }
+
+    private func aseta(_ arvo: Float) {
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) { [weak self] in
+            guard let self else { return }
+            let kaikki = self.nakymat.allObjects
+            guard let v = kaikki.first(where: { $0.window != nil }) ?? kaikki.first,
+                  let liuku = v.subviews.compactMap({ $0 as? UISlider }).first else { return }
+            liuku.setValue(arvo, animated: false)
+        }
+    }
+}
+
+struct PiilotettuAanensaadin: UIViewRepresentable {
+    func makeUIView(context: Context) -> MPVolumeView {
+        let v = MPVolumeView(frame: CGRect(x: 0, y: 0, width: 1, height: 1))
+        v.alpha = 0.01 // näkyvissä oleva (ei hidden) säädin piilottaa järjestelmän ilmoituksen
+        AaniNapit.shared.liita(v)
+        return v
+    }
+
+    func updateUIView(_ v: MPVolumeView, context: Context) {}
 }
 
 @main
@@ -78,9 +164,13 @@ struct ContentView: View {
                 .lineLimit(2)
         }
         .padding(.horizontal)
+        .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
         .fullScreenCover(isPresented: $kosketuslevy) { KosketuslevyView() }
+        .onReceive(AaniNapit.shared.$viesti.dropFirst()) { status = $0 }
         .onChange(of: scenePhase, initial: true) { _, phase in
+            if phase == .background { AaniNapit.shared.pysayta() }
             guard phase == .active else { return }
+            AaniNapit.shared.kaynnista()
             var launch = 0
             if firstActive {
                 firstActive = false
@@ -98,29 +188,13 @@ struct ContentView: View {
     func big(_ label: String, _ nimi: String) -> some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-            Task { await send(label: label, nimi: nimi) }
+            Task { status = await lahetaKomento(label: label, nimi: nimi) }
         } label: {
             Text(label)
                 .font(.title2.bold())
                 .frame(maxWidth: .infinity, minHeight: 64)
         }
         .buttonStyle(.borderedProminent)
-    }
-
-    func send(label: String, nimi: String) async {
-        let now = Int(Date().timeIntervalSince1970 * 1000)
-        guard let url = URL(string: baseURL + "/k/" + nimi + "?t=\(now)") else { return }
-        var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
-        req.httpMethod = "POST"
-        let t0 = Date()
-        do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? -1
-            let rtt = Int(Date().timeIntervalSince(t0) * 1000)
-            status = code == 200 ? "\(label): OK \(rtt) ms" : "\(label): HTTP \(code)"
-        } catch {
-            status = "\(label): \(error.localizedDescription)"
-        }
     }
 
     func warmUp(launch: Int) async {
