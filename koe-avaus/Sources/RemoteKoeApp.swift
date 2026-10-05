@@ -97,7 +97,8 @@ struct ContentView: View {
     }
 
     func send(label: String, nimi: String) async {
-        guard let url = URL(string: baseURL + "/k/" + nimi) else { return }
+        let now = Int(Date().timeIntervalSince1970 * 1000)
+        guard let url = URL(string: baseURL + "/k/" + nimi + "?t=\(now)") else { return }
         var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
         req.httpMethod = "POST"
         let t0 = Date()
@@ -113,7 +114,10 @@ struct ContentView: View {
 
     func warmUp(launch: Int) async {
         let now = Int(Date().timeIntervalSince1970 * 1000)
-        guard let url = URL(string: baseURL + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)") else { return }
+        let painallus = UserDefaults.standard.integer(forKey: "painallus_ms")
+        UserDefaults.standard.removeObject(forKey: "painallus_ms")
+        let lisa = painallus > 0 && now - painallus < 30000 ? "&painallus=\(painallus)" : ""
+        guard let url = URL(string: baseURL + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)" + lisa) else { return }
         let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
         _ = try? await URLSession.shared.data(for: req)
     }

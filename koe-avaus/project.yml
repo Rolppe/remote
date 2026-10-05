@@ -38,5 +38,7 @@ targets:
       path: Control/Info.plist
       properties:
         CFBundleDisplayName: Kauko
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
