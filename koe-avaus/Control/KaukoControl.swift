@@ -12,10 +12,10 @@ struct KaukoControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
         StaticControlConfiguration(kind: "com.example.remote.control") {
             ControlWidgetButton(action: OpenKaukoIntent()) {
-                Label("Kauko", systemImage: "av.remote")
+                Label("Controller", systemImage: "av.remote")
             }
         }
-        .displayName("Kauko")
-        .description("Avaa Kauko")
+        .displayName("Controller")
+        .description("Avaa Controller")
     }
 }

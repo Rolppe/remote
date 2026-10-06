@@ -255,8 +255,7 @@ struct AloitusView: View {
             .padding(.horizontal)
             .padding(.bottom, 8)
         }
-        .navigationTitle("Kauko")
-        .toolbar {
+        .toolbar { // ei otsikkoa: sovelluksen nimi ei näy näkymissä (käyttäjä 6.10.2026)
             ToolbarItem(placement: .topBarTrailing) {
                 Button { laitteet = true } label: { Image(systemName: "slider.horizontal.3") }
                     .accessibilityLabel("Laitteet")

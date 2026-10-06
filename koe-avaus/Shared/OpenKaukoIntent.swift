@@ -2,7 +2,7 @@ import AppIntents
 import Foundation
 
 struct OpenKaukoIntent: AppIntent {
-    static var title: LocalizedStringResource = "Avaa Kauko"
+    static var title: LocalizedStringResource = "Avaa Controller"
     static var openAppWhenRun = true
 
     func perform() async throws -> some IntentResult {
