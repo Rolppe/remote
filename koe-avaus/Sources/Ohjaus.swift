@@ -49,8 +49,14 @@ struct TVOhjausView: View {
         .onChange(of: hakuFokus) { _, auki in
             if auki && netflixHaku { tv.netflixAvaaHaku() }
         }
-        .onAppear { Task { await tv.yhdista() } }
-        .onDisappear { tv.profiiliValinta = false }
+        .onAppear {
+            Task { await tv.yhdista() }
+            if palvelu == .netflix { tv.profiiliVahti(true) }
+        }
+        .onDisappear {
+            tv.profiiliVahti(false)
+            tv.profiiliValinta = false
+        }
     }
 
     @ViewBuilder private var hakukentta: some View {
@@ -112,65 +118,62 @@ struct TVOhjausView: View {
     @ViewBuilder private var napit: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
-                nappi("Takaisin", "arrow.uturn.backward", "BACK")
-                // TV:n aloitusruutu ja Kaukon aloitussivu yhdessä: palvelun näkymä ei jää auki.
-                nappi("Koti", "house", "HOME") { dismiss() }
-                nappi("OK", "checkmark", "ENTER")
+                TVNappi(teksti: "Takaisin", kuva: "arrow.uturn.backward", nimi: "BACK")
+                // TV:n aloitusruutu ja Kaukon aloitussivu (kosketuslevyineen) yhdessä: palvelun näkymä ei jää auki.
+                TVNappi(teksti: "Koti", kuva: "house", nimi: "HOME") { dismiss() }
+                TVNappi(teksti: "OK", kuva: "checkmark", nimi: "ENTER")
             }
             if palvelu == .liveTV {
                 HStack(spacing: 10) {
-                    nappi("Kanava −", "chevron.down", "CHANNELDOWN")
-                    nappi("Kanava +", "chevron.up", "CHANNELUP")
+                    TVNappi(teksti: "Kanava −", kuva: "chevron.down", nimi: "CHANNELDOWN")
+                    TVNappi(teksti: "Kanava +", kuva: "chevron.up", nimi: "CHANNELUP")
                 }
             }
         }
     }
+}
 
-    private func nappi(_ teksti: String?, _ kuva: String, _ nimi: String, _ lisaksi: (() -> Void)? = nil) -> some View {
+// TV:n kaukosäätimen nappi osoitinyhteyden kautta (ohjausnäkymä ja aloitussivu).
+struct TVNappi: View {
+    let teksti: String
+    let kuva: String
+    let nimi: String
+    var lisaksi: (() -> Void)? = nil
+    @EnvironmentObject private var tv: LGTV
+
+    var body: some View {
         Button {
             UIImpactFeedbackGenerator(style: .medium).impactOccurred()
             tv.nappi(nimi)
             lisaksi?()
         } label: {
-            Group {
-                if let teksti { Label(teksti, systemImage: kuva) } else { Image(systemName: kuva) }
-            }
-            .font(.headline)
-            .frame(maxWidth: .infinity, minHeight: 46)
+            Label(teksti, systemImage: kuva)
+                .font(.headline)
+                .frame(maxWidth: .infinity, minHeight: 46)
         }
         .buttonStyle(.bordered)
-        .accessibilityLabel(teksti ?? nimi)
+        .accessibilityLabel(teksti)
     }
 }
 
-// Netflixin "Kuka katsoo?": profiilit TV:n kuvakaappauksesta pystylistana (oma kuva, fokus kehyksellä).
-// Napautus valitsee profiilin, pitkä painallus asettaa oletusprofiilin (tähti). Oikealla pystyliukusäädin
-// siirtää TV:n valintaa askel kerrallaan (alas = seuraava), sormen nosto valitsee (OK kuvan vahvistuksella).
+// Netflixin "Kuka katsoo?": profiilit TV:n kuvakaappauksesta pystylistana (oma kuva, TV:n fokus kehyksellä).
+// Napautus valitsee profiilin (OK vasta kuvan vahvistamasta fokuksesta), pitkä painallus asettaa oletusprofiilin
+// (tähti). Liukusäädin poistettu 6.10.2026 (käyttäjä: profiili valitaan napauttamalla puhelimen ruudulta).
 struct ProfiiliValinta: View {
     @ObservedObject var tv: LGTV
     @State private var oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int
-    @State private var edellinen: CGFloat = 0
-    @State private var kertyma: CGFloat = 0
-    @State private var siirto: CGFloat = 0
-    private let askel: CGFloat = 46
-    private let nuppi: CGFloat = 64
-    private let kuvaKoko: CGFloat = 56
+    private let kuvaKoko: CGFloat = 76
 
     var body: some View {
-        let n = tv.profiiliKuvat.count
-        let korkeus = max(240, CGFloat(n) * kuvaKoko + CGFloat(max(0, n - 1)) * 10)
         VStack(spacing: 14) {
             HStack(spacing: 12) {
                 PalveluKuvake(palvelu: .netflix, koko: 44)
                 Text("Kuka katsoo?").font(.title2.bold())
             }
-            HStack(alignment: .top, spacing: 24) {
-                VStack(spacing: 10) {
-                    ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
-                }
-                liukusaadin(korkeus)
+            VStack(spacing: 12) {
+                ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
             }
-            Text("Pitkä painallus: oletusprofiili").font(.footnote).foregroundStyle(.secondary)
+            Text("Napauta profiilia · pitkä painallus: oletusprofiili").font(.footnote).foregroundStyle(.secondary)
             Button("Ohita") { tv.profiiliValinta = false }
                 .font(.footnote)
         }
@@ -203,51 +206,6 @@ struct ProfiiliValinta: View {
                     UserDefaults.standard.set(i, forKey: "netflix_oletusprofiili")
                 }
             }
-    }
-
-    private func liukusaadin(_ korkeus: CGFloat) -> some View {
-        let raja = max(0, (korkeus - nuppi) / 2 - 4)
-        return ZStack {
-            Capsule().fill(Color(.tertiarySystemFill))
-            VStack {
-                Image(systemName: "chevron.up")
-                Spacer()
-                Image(systemName: "chevron.down")
-            }
-            .font(.title3.weight(.semibold))
-            .foregroundStyle(.secondary)
-            .padding(.vertical, 22)
-            Circle()
-                .fill(Color.accentColor)
-                .frame(width: nuppi, height: nuppi)
-                .overlay(Image(systemName: "person.fill").font(.title2).foregroundStyle(.white))
-                .shadow(color: .black.opacity(0.2), radius: 3, y: 1)
-                .offset(y: siirto)
-        }
-        .frame(width: 72, height: korkeus)
-        .contentShape(Capsule())
-        .gesture(DragGesture(minimumDistance: 0)
-            .onChanged { v in
-                let d = v.translation.height - edellinen
-                edellinen = v.translation.height
-                siirto = max(-raja, min(raja, v.translation.height))
-                guard tv.netflix else { return }
-                kertyma += d
-                while kertyma >= askel { kertyma -= askel; askella(1) }
-                while kertyma <= -askel { kertyma += askel; askella(-1) }
-            }
-            .onEnded { _ in
-                edellinen = 0
-                kertyma = 0
-                withAnimation(.spring(duration: 0.3)) { siirto = 0 }
-                UIImpactFeedbackGenerator(style: .medium).impactOccurred()
-                Task { await tv.profiiliValitse() }
-            })
-    }
-
-    private func askella(_ suunta: Int) {
-        UISelectionFeedbackGenerator().selectionChanged()
-        tv.profiiliSiirto(suunta)
     }
 }
 
