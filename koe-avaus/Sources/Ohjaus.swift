@@ -24,14 +24,15 @@ struct TVOhjausView: View {
         return nil
     }
     private var ruudukkoHaku: Bool { netflixHaku || ruudukko != nil }
-    private var profiili: Bool { palvelu == .netflix && tv.profiiliValinta }
+    private var profiiliPalvelu: Bool { palvelu == .netflix || palvelu == .youtube }
+    private var profiili: Bool { profiiliPalvelu && tv.profiiliValinta }
 
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 14) {
                 if profiili {
                     Spacer()
-                    ProfiiliValinta(tv: tv)
+                    ProfiiliValinta(tv: tv, palvelu: palvelu ?? .netflix)
                     Spacer()
                 } else {
                     if let k = tv.kaynnistys {
@@ -63,10 +64,10 @@ struct TVOhjausView: View {
         }
         .onAppear {
             Task { await tv.yhdista() }
-            if palvelu == .netflix { tv.profiiliVahti(true) }
+            if profiiliPalvelu { tv.profiiliVahti(palvelu) }
         }
         .onDisappear {
-            tv.profiiliVahti(false)
+            tv.profiiliVahti(nil)
             tv.profiiliValinta = false
         }
     }
@@ -149,6 +150,19 @@ struct TVOhjausView: View {
                     TVNappi(teksti: "Kanava +", kuva: "chevron.up", nimi: "CHANNELUP")
                 }
             }
+            if palvelu == .youtube {
+                // "Kuka katsoo?" tulee YouTubessa itsestään vain kylmäkäynnistyksessä: avataan sivupalkista.
+                Button {
+                    UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                    tv.youtubeAvaaProfiilit()
+                } label: {
+                    Label("Profiili", systemImage: "person.crop.circle")
+                        .font(.headline)
+                        .frame(maxWidth: .infinity, minHeight: 46)
+                }
+                .buttonStyle(.bordered)
+                .accessibilityLabel("Profiili")
+            }
         }
     }
 }
@@ -176,22 +190,40 @@ struct TVNappi: View {
     }
 }
 
-// Netflixin "Kuka katsoo?": profiilit TV:n kuvakaappauksesta pystylistana (oma kuva, TV:n fokus kehyksellä).
-// Napautus valitsee profiilin (OK vasta kuvan vahvistamasta fokuksesta), pitkä painallus asettaa oletusprofiilin
-// (tähti). Liukusäädin poistettu 6.10.2026 (käyttäjä: profiili valitaan napauttamalla puhelimen ruudulta).
+// "Kuka katsoo?": profiilit TV:n kuvakaappauksesta samassa järjestyksessä kuin TV:llä (Netflix pystylistana,
+// YouTube vaakarivinä ympyröinä), TV:n fokus kehyksellä. Napautus valitsee profiilin (OK vasta kuvan vahvistamasta
+// fokuksesta), pitkä painallus asettaa oletusprofiilin (tähti). Liukusäädin poistettu 6.10.2026 (käyttäjä: profiili
+// valitaan napauttamalla puhelimen ruudulta).
 struct ProfiiliValinta: View {
     @ObservedObject var tv: LGTV
-    @State private var oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int
+    let palvelu: Palvelu
+    @State private var oletus: Int?
     private let kuvaKoko: CGFloat = 76
+
+    init(tv: LGTV, palvelu: Palvelu) {
+        self.tv = tv
+        self.palvelu = palvelu
+        _oletus = State(initialValue: UserDefaults.standard.object(forKey: LGTV.oletusAvain(palvelu)) as? Int)
+    }
 
     var body: some View {
         VStack(spacing: 14) {
             HStack(spacing: 12) {
-                PalveluKuvake(palvelu: .netflix, koko: 44)
+                PalveluKuvake(palvelu: palvelu, koko: 44)
                 Text("Kuka katsoo?").font(.title2.bold())
             }
-            VStack(spacing: 12) {
-                ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
+            if palvelu == .youtube {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
+                    }
+                    .padding(4)
+                }
+                .frame(height: kuvaKoko + 8)
+            } else {
+                VStack(spacing: 12) {
+                    ForEach(Array(tv.profiiliKuvat.enumerated()), id: \.offset) { i, kuva in profiili(i, kuva) }
+                }
             }
             Text("Napauta profiilia · pitkä painallus: oletusprofiili").font(.footnote).foregroundStyle(.secondary)
             Button("Ohita") { tv.profiiliValinta = false }
@@ -200,7 +232,8 @@ struct ProfiiliValinta: View {
     }
 
     private func profiili(_ i: Int, _ kuva: UIImage) -> some View {
-        let muoto = RoundedRectangle(cornerRadius: 8, style: .continuous)
+        let muoto = palvelu == .youtube ? AnyShape(Circle()) : AnyShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        let avain = LGTV.oletusAvain(palvelu)
         return Image(uiImage: kuva)
             .resizable().scaledToFill()
             .frame(width: kuvaKoko, height: kuvaKoko)
@@ -223,10 +256,10 @@ struct ProfiiliValinta: View {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 if oletus == i {
                     oletus = nil
-                    UserDefaults.standard.removeObject(forKey: "netflix_oletusprofiili")
+                    UserDefaults.standard.removeObject(forKey: avain)
                 } else {
                     oletus = i
-                    UserDefaults.standard.set(i, forKey: "netflix_oletusprofiili")
+                    UserDefaults.standard.set(i, forKey: avain)
                 }
             }
     }

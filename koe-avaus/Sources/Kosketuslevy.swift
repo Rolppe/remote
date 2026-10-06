@@ -67,9 +67,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var hakee = false
     @Published var etuala: String?          // TV:n etualalla oleva sovellus (appId)
     @Published var kaynnistys: String?      // aloitussivun valinnan eteneminen (Aloitus.swift)
-    @Published var profiiliValinta = false  // Netflixin profiilin valinta napauttamalla
-    @Published var profiilit: NetflixProfiilit?   // TV:n kuvakaappauksesta tunnistetut profiilit
+    @Published var profiiliValinta = false  // "Kuka katsoo?" -profiilin valinta napauttamalla (Netflix, YouTube)
+    @Published var profiilit: Profiilit?    // TV:n kuvakaappauksesta tunnistetut profiilit
     @Published var profiiliKuvat: [UIImage] = []  // profiilien omat kuvat (rajaukset kuvakaappauksesta)
+    @Published private(set) var profiiliPalvelu: Palvelu? // palvelu, jonka profiiliruutua vahditaan
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
@@ -252,20 +253,25 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    // Netflixin "Kuka katsoo?" -vahti (REMOTE-ALOITUS-KORJAUS): kun Netflix-näkymä on auki, TV:n kuvaa katsotaan
-    // 1,5 s välein (valitun profiilin jälkeen 5 s, haun ajan tauolla). Profiiliruutu näytetään puhelimessa, kun
-    // se ilmestyy TV:lle: kylmäkäynnistyksessä vasta TV:n ja Netflixin heräämisen jälkeen (6.10.2026 10 s:n
-    // tarkkailu ei ehtinyt), ja myös myöhemmin, kun profiilia vaihdetaan TV:llä. Oletusprofiili valitaan vain
-    // käynnistyksen jälkeen (netflixOletusAsti), ei myöhemmässä vaihdossa. Kun TV poistuu profiiliruudulta
-    // (valinta TV:n omalla säätimellä), puhelimen profiilinäkymä sulkeutuu.
-    var netflixOletusAsti = Date.distantPast
+    // "Kuka katsoo?" -vahti (REMOTE-ALOITUS-KORJAUS; YouTube REMOTE-ALOITUS-YOUTUBE-PROFIILI): kun Netflixin tai
+    // YouTuben näkymä on auki, TV:n kuvaa katsotaan 1,5 s välein (valitun profiilin jälkeen 5 s, haun ajan tauolla).
+    // Profiiliruutu näytetään puhelimessa, kun se ilmestyy TV:lle: kylmäkäynnistyksessä vasta TV:n ja sovelluksen
+    // heräämisen jälkeen (6.10.2026 10 s:n tarkkailu ei ehtinyt), ja myös myöhemmin, kun profiilia vaihdetaan TV:llä.
+    // Oletusprofiili valitaan vain käynnistyksen jälkeen (oletusProfiiliAsti), ei myöhemmässä vaihdossa. Kun TV
+    // poistuu profiiliruudulta (valinta TV:n omalla säätimellä), puhelimen profiilinäkymä sulkeutuu.
+    var oletusProfiiliAsti = Date.distantPast
     private var profiiliVahtiTyo: Task<Void, Never>?
     private var profiiliValitsee = false
 
-    func profiiliVahti(_ paalla: Bool) {
+    static func oletusAvain(_ p: Palvelu) -> String { "\(p.rawValue)_oletusprofiili" }
+
+    func profiiliVahti(_ palvelu: Palvelu?) {
         profiiliVahtiTyo?.cancel()
         profiiliVahtiTyo = nil
-        guard paalla else { return }
+        profiiliPalvelu = palvelu
+        profiilit = nil
+        profiiliKuvat = []
+        guard let palvelu else { return }
         profiiliVahtiTyo = Task { [weak self] in
             var nakyi = false, valittu = false
             while !Task.isCancelled {
@@ -277,10 +283,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                         if let p = tulos, !nakyi {
                             profiiliValinta = true
                             valittu = false
-                            if Date() < netflixOletusAsti,
-                               let oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int,
+                            if Date() < oletusProfiiliAsti,
+                               let oletus = UserDefaults.standard.object(forKey: Self.oletusAvain(palvelu)) as? Int,
                                oletus < p.ruudut.count {
-                                netflixOletusAsti = .distantPast
+                                oletusProfiiliAsti = .distantPast
                                 await profiiliValitse(oletus)
                             }
                         } else if tulos == nil && nakyi {
@@ -296,45 +302,186 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     }
 
     // Yksi kuva: profiilit (ja niiden omat kuvat) talteen, jos TV näyttää profiiliruudun; nil = ei profiiliruutua.
-    // Heittää, jos kuvaa ei saatu, jotta ohimenevä virhe ei sulje profiilinäkymää.
-    private func profiiliKuva() async throws -> NetflixProfiilit? {
+    // Heittää, jos kuvaa ei saatu, jotta ohimenevä virhe ei sulje profiilinäkymää. YouTubessa profiilien kuvat
+    // otetaan fokuksen ollessa ensimmäisessä profiilissa, joten fokus viedään ensin sinne (YouTubeProfiili.swift).
+    private func profiiliKuva() async throws -> Profiilit? {
+        if profiiliPalvelu == .youtube {
+            guard try await youtubeProfiiliNyt() != nil else { return nil }
+            if profiiliKuvat.isEmpty { _ = try await youtubeProfiiliAlkuun() }
+            return profiilit
+        }
         let kuva = try await kuvakaappausKuva()
         guard let pisteet = Kuvapisteet(kuva) else { throw virhe("kuvaa ei voi lukea") }
         guard let p = NetflixRuudukko.tunnistaProfiilit(pisteet) else { return nil }
         profiilit = p
-        profiiliKuvat = p.ruudut.map { r in
+        profiiliKuvat = rajaa(kuva, p.ruudut)
+        return p
+    }
+
+    private func rajaa(_ kuva: CGImage, _ ruudut: [CGRect]) -> [UIImage] {
+        ruudut.map { r in
             UIGraphicsImageRenderer(size: r.size).image { _ in
                 UIImage(cgImage: kuva).draw(in: CGRect(x: -r.minX, y: -r.minY, width: 960, height: 540))
             }
         }
-        return p
+    }
+
+    private func profiiliValittu(_ palvelu: String) {
+        profiiliValinta = false
+        profiilit = nil
+        profiiliKuvat = []
+        tila = "\(palvelu): profiili valittu"
+    }
+
+    func profiiliValitse(_ indeksi: Int) async {
+        guard !profiiliValitsee else { return }
+        profiiliValitsee = true
+        defer { profiiliValitsee = false }
+        // Profiiliruutu jää paikalleen, joten TV ehtii näytönsäästäjään, ja se nielee ensimmäisen näppäimen
+        // herätykseen (6.10.2026 simulaattoriajot p1, p2: OK jäi tulematta, ruutu ennallaan).
+        await herataNaytto()
+        if profiiliPalvelu == .youtube { await youtubeProfiiliValitse(indeksi) } else { await netflixProfiiliValitse(indeksi) }
     }
 
     // Napautettu profiili: fokus siirretään kuvan mukaan erotuksen verran (lista on pystysuora: alas = seuraava),
     // ja OK lähtee vasta, kun kuva näyttää fokuksen valitussa profiilissa (REMOTE-KOE-TOISTO). Jokainen siirto
     // tarkistetaan kuvasta: 6.10.2026 sokea UP×n + DOWN×i 0,15 s tahdilla vei fokuksen oikeaan profiiliin, mutta
     // heti otettu kuva ei vahvistanut sitä (animaatio kesken), joten OK jäi lähtemättä.
-    func profiiliValitse(_ indeksi: Int) async {
-        guard !profiiliValitsee else { return }
-        profiiliValitsee = true
-        defer { profiiliValitsee = false }
+    private func netflixProfiiliValitse(_ indeksi: Int) async {
         for _ in 0..<6 {
             do {
                 guard let nyt = try await profiiliKuva() else { tila = "Netflix: profiiliruutu ei näy TV:llä"; return }
-                if nyt.fokus == indeksi {
+                if let f = nyt.fokus, f == indeksi {
                     nappi("ENTER")
-                    profiiliValinta = false
-                    profiilit = nil
-                    profiiliKuvat = []
-                    tila = "Netflix: profiili valittu"
+                    profiiliValittu("Netflix")
                     return
                 }
-                let ero = indeksi - nyt.fokus
+                let ero = indeksi - (nyt.fokus ?? 0)
                 try await painele(Array(repeating: ero > 0 ? "DOWN" : "UP", count: abs(ero)), 0.3)
             } catch {}
             try? await Task.sleep(nanoseconds: 700_000_000)
         }
         tila = "Netflix: profiilin fokus ei täsmää — napauta uudelleen"
+    }
+
+    // YouTube: rivi vierii, joten fokuksen indeksi tiedetään vain ensimmäisessä profiilissa (paikka 0). Valinta
+    // vie fokuksen sinne ja siitä oikealle askel kerrallaan; jokainen askel todennetaan tasaantuneesta kuvasta
+    // (allekirjoitus muuttui), ja OK lähtee vasta, kun fokus on profiilissa (REMOTE-KOE-TOISTO).
+    private func youtubeProfiiliValitse(_ indeksi: Int) async {
+        do {
+            var nyt = try await youtubeProfiiliAlkuun()
+            guard indeksi < nyt.ruudut.count else { throw virhe("profiilia ei näy") }
+            var f = 0, hukka = 0
+            while f < indeksi {
+                try await painele(["RIGHT"], 0.3)
+                let uusi = try await youtubeProfiiliTasainen()
+                if YouTubeRuudukko.sama(uusi.allekirjoitus, nyt.allekirjoitus) {
+                    hukka += 1
+                    guard hukka < 3 else { throw virhe("fokus ei siirry") }
+                } else {
+                    f += 1
+                    hukka = 0
+                    nyt = uusi
+                    profiilit = Profiilit(fokus: f, ruudut: profiilit?.ruudut ?? [])
+                }
+            }
+            guard nyt.fokusProfiili else { throw virhe("fokus ei ole profiilissa") }
+            // OK todennetaan: ruudun pitää poistua. Simulaattoriajossa p5 (6.10.2026) OK hukkui herätyksestä
+            // huolimatta ja TV jäi profiiliriville; uusi OK vain, kun kuva näyttää rivin yhä samana (sama fokus).
+            for _ in 0..<3 {
+                await herataNaytto()
+                nappi("ENTER")
+                try await Task.sleep(nanoseconds: 2_000_000_000)
+                guard let jalkeen = try await youtubeProfiiliNyt() else {
+                    profiiliValittu("YouTube")
+                    return
+                }
+                guard YouTubeRuudukko.sama(jalkeen.allekirjoitus, nyt.allekirjoitus) else { break }
+            }
+            throw virhe("OK ei mennyt perille")
+        } catch {
+            tila = "YouTube: \(error.localizedDescription) — napauta uudelleen"
+        }
+    }
+
+    // Yksi kuva YouTuben profiiliriviltä; fokuksen ollessa ensimmäisessä profiilissa myös profiilien kuvat talteen.
+    private func youtubeProfiiliNyt() async throws -> YouTubeProfiiliKuva? {
+        let kuva = try await kuvakaappausKuva()
+        guard let pisteet = Kuvapisteet(kuva) else { throw virhe("kuvaa ei voi lukea") }
+        guard let y = YouTubeRuudukko.tunnistaProfiilit(pisteet) else { return nil }
+        if y.fokusPaikka == 0 {
+            profiiliKuvat = rajaa(kuva, y.ruudut)
+            profiilit = Profiilit(fokus: y.fokusProfiili ? 0 : nil, ruudut: y.ruudut)
+        } else if let p = profiilit {
+            profiilit = Profiilit(fokus: nil, ruudut: p.ruudut)
+        }
+        return y
+    }
+
+    // Tasaantunut kuva: kaksi peräkkäistä kuvaa samat (siirtymäanimaatio ohi). Heittää, jos ruutu ei näy.
+    private func youtubeProfiiliTasainen() async throws -> YouTubeProfiiliKuva {
+        var edellinen: YouTubeProfiiliKuva?
+        for _ in 0..<5 {
+            let k = try await youtubeProfiiliNyt()
+            if let k, let e = edellinen, YouTubeRuudukko.sama(k.allekirjoitus, e.allekirjoitus) { return k }
+            edellinen = k
+            try await Task.sleep(nanoseconds: 300_000_000)
+        }
+        throw virhe("profiiliruutu ei näy TV:llä")
+    }
+
+    // Fokus ensimmäiseen profiiliin: vasemmalle fokuksen paikan verran, kunnes kuva näyttää sen paikassa 0
+    // (vierinyt rivi pitää fokuksen paikassa 1, joten kierroksia voi olla useampi).
+    private func youtubeProfiiliAlkuun() async throws -> YouTubeProfiiliKuva {
+        var nyt = try await youtubeProfiiliTasainen()
+        for _ in 0..<6 {
+            if nyt.fokusPaikka == 0 { return nyt }
+            try await painele(Array(repeating: "LEFT", count: nyt.fokusPaikka), 0.3)
+            nyt = try await youtubeProfiiliTasainen()
+        }
+        throw virhe("fokus ei palannut ensimmäiseen profiiliin")
+    }
+
+    // YouTuben "Kuka katsoo?" ilman kylmäkäynnistystä: sivupalkin ylin kohta (mitattu 6.10.2026: kortista LEFT →
+    // UP×12 → kuvan vahvistama ylin kohta → OK avaa profiilirivin). Haun näkymistä BACK vie etusivulle; videon
+    // aikana LEFT kelaisi, joten vasemmalle enintään 6 kertaa kuten haun ankkuroinnissa (YouTubeHaku.swift).
+    func youtubeAvaaProfiilit() {
+        guard !profiiliValitsee, !hakee else { return }
+        profiiliValitsee = true
+        Task {
+            defer { profiiliValitsee = false }
+            tila = "YouTube: avataan profiilit…"
+            await herataNaytto()
+            do {
+                var vasemmalle = 0
+                for _ in 0..<14 {
+                    let k = try await kuvapisteet()
+                    if YouTubeRuudukko.tunnistaProfiilit(k) != nil {
+                        _ = try await youtubeProfiiliAlkuun()
+                        profiiliValinta = true
+                        tila = "YouTube: valitse profiili"
+                        return
+                    }
+                    switch YouTubeRuudukko.tunnista(k).tila {
+                    case .sivupalkki(let kohta) where kohta == 0:
+                        nappi("ENTER")
+                        try await Task.sleep(nanoseconds: 1_000_000_000)
+                    case .sivupalkki(let kohta):
+                        try await painele(Array(repeating: "UP", count: kohta), 0.15)
+                    case .nappain, .hakunakyma, .tulokset:
+                        try await painele(["BACK"], 0.5)
+                    case .muu:
+                        guard vasemmalle < 6 else { throw virhe("sivupalkkia ei löytynyt") }
+                        vasemmalle += 1
+                        try await painele(["LEFT"], 0.2)
+                    }
+                    try await Task.sleep(nanoseconds: 500_000_000)
+                }
+                throw virhe("profiilit eivät auenneet")
+            } catch {
+                tila = "YouTube: \(error.localizedDescription)"
+            }
+        }
     }
 
     // Kirjoittaa haun Netflixin ruudukolla sitä mukaa kuin kenttään kirjoitetaan: muutokset jonoon,
