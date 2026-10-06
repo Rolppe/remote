@@ -192,6 +192,9 @@ struct ProfiiliValinta: View {
                 }
             }
             .contentShape(muoto)
+            .accessibilityElement()
+            .accessibilityAddTraits(.isImage)
+            .accessibilityIdentifier("profiili-\(i)")
             .onTapGesture {
                 UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                 Task { await tv.profiiliValitse(i) }
