@@ -25,8 +25,10 @@ extension AreenaRuudukko: HakuRuudukko {
         var vasemmalle = 0, ylos = false
         for _ in 0..<12 {
             switch k.tila {
-            case .nappain(let p) where p == tyhjenna:
-                try await tv.painele(["UP"], 0.15) // Tyhjennästä siirry ei laske: ylös palaa edelliseen
+            case .nappain(let p) where p == tyhjenna || p.r == 5:
+                // Tyhjennä ja rivin 5 leveät näppäimet: ylös palaa sarakkeeseen, josta niille tultiin, eikä kuva
+                // kerro sitä (a7 ja a9 6.10.2026 kirjoittivat ⌫:ltä sarakkeen sivuun) — ylös ja paikka kuvasta.
+                try await tv.painele(["UP"], 0.15)
             case .nappain(let p):
                 return p
             case .valilehti(let podcastit):

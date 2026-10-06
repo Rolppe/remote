@@ -96,11 +96,14 @@ final class RuudukkoHaku<M: HakuRuudukko>: RuudukkoOhjain {
         do {
             if !tv.valmis { await tv.yhdista() }
             guard tv.valmis else { throw tv.virhe("ei yhteyttä TV:hen") }
+            // Vanhentunut paikka: TV on voinut ehtiä näytönsäästäjään. Tuoreessa kirjoituksessa ei kysytä (nopeus).
+            if Date().timeIntervalSince(aika) >= tuoreus { await tv.herataNaytto() }
             while !jono.isEmpty {
                 let ops = jono
                 jono = []
                 var p = Date().timeIntervalSince(aika) < tuoreus ? paikka : nil
                 var napit: [String] = []
+                var ensimmainen = false
                 for op in ops {
                     switch op {
                     case .avaa:
@@ -112,6 +115,7 @@ final class RuudukkoHaku<M: HakuRuudukko>: RuudukkoOhjain {
                         try await paina(napit, p)
                         napit = []
                         p = try await tyhjenna()
+                        ensimmainen = true
                         continue
                     default:
                         break
@@ -133,6 +137,16 @@ final class RuudukkoHaku<M: HakuRuudukko>: RuudukkoOhjain {
                         let (n, loppu) = M.painallukset(String(ch), alku: q)
                         napit += n
                         q = loppu
+                        if ensimmainen {
+                            // Ensimmäinen kirjain tyhjään kenttään vaihtaa näkymän tuloksiin, ja seuraava nuoli voi
+                            // hukkua okViiveestä huolimatta (a10 6.10.2026: K, sitten O U:n sijaan): paikka kuvasta.
+                            ensimmainen = false
+                            try await paina(napit, q)
+                            napit = []
+                            try await Task.sleep(nanoseconds: 500_000_000)
+                            p = try await M.ankkuroi(tv)
+                            continue
+                        }
                     case .avaa, .tyhjenna:
                         break
                     }
@@ -182,6 +196,9 @@ final class RuudukkoHaku<M: HakuRuudukko>: RuudukkoOhjain {
             guard let q = k.paikka else { throw tv.virhe("fokus karkasi tyhjennyksessä") }
             p = q
             if !k.hakuteksti {
+                // Ylös palasi alarivin leveälle näppäimelle, jonka paluusaraketta kuva ei kerro: ankkurointi
+                // siirtyy kirjaimelle ja lukee paikan kuvasta.
+                p = try await M.ankkuroi(tv)
                 paikka = p
                 aika = Date()
                 return p

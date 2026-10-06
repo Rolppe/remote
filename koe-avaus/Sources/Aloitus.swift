@@ -120,16 +120,31 @@ extension LGTV {
         return await lahetaKomento(label: "TV pois (IR)", nimi: "lg_pois")
     }
 
-    // Active = päällä; Screen Off = päällä, kuva pois (kuva päälle); valmiustila = ei päällä.
+    // Active = päällä; Screen Off ja Screen Saver = päällä, kuva pois (kuva päälle); valmiustila = ei päällä.
     // Jos TV ei kerro tilaa, oletetaan päällä oleva (yhteys toimii).
     private func onPaalla() async -> Bool {
+        guard let tila = await herataNaytto() else { return true }
+        return tila == "Active" || tila == "Screen Off" || tila == "Screen Saver"
+    }
+
+    // Näytönsäästäjä ja "näyttö pois" nielevät ensimmäisen näppäimen herätykseen, joten ruudukon paikka
+    // ajautuu (simulaattoritestit a5 ja a7 6.10.2026). turnOnScreen herättää molemmista ilman näppäintä.
+    // Palauttaa tilan ennen herätystä, nil jos TV ei kerro sitä.
+    @discardableResult
+    func herataNaytto() async -> String? {
         guard let v = try? await pyyda("ssap://com.webos.service.tvpower/power/getPowerState", [:], aika: 2),
-              let tila = (v["payload"] as? [String: Any])?["state"] as? String else { return true }
-        if tila == "Screen Off" {
-            _ = try? await pyyda("ssap://com.webos.service.tvpower/power/turnOnScreen", [:], aika: 2)
-            return true
+              let tila = (v["payload"] as? [String: Any])?["state"] as? String else { return nil }
+        guard tila == "Screen Off" || tila == "Screen Saver" else { return tila }
+        _ = try? await pyyda("ssap://com.webos.service.tvpower/power/turnOnScreen", [:], aika: 2)
+        // Herätyksen jälkeen TV voi palata kelloon hetkeksi (a8 6.10.2026): odota Active, sitten tasaantuminen.
+        let raja = Date().addingTimeInterval(3)
+        while Date() < raja {
+            try? await Task.sleep(nanoseconds: 300_000_000)
+            if let v = try? await pyyda("ssap://com.webos.service.tvpower/power/getPowerState", [:], aika: 1),
+               (v["payload"] as? [String: Any])?["state"] as? String == "Active" { break }
         }
-        return tila == "Active"
+        try? await Task.sleep(nanoseconds: 800_000_000)
+        return tila
     }
 
     private func etualaNyt() async -> String? {
