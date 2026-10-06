@@ -18,6 +18,8 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.remote
+    scheme:
+      testTargets: [RemoteKoeUITests]
     info:
       path: Info.plist
       properties:
@@ -42,3 +44,14 @@ targets:
           NSAllowsLocalNetworking: true
         NSExtension:
           NSExtensionPointIdentifier: com.apple.widgetkit-extension
+  RemoteKoeUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    deploymentTarget: "18.0"
+    sources: [UITests]
+    dependencies:
+      - target: RemoteKoe
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.example.remote.uitests
+        GENERATE_INFOPLIST_FILE: YES
