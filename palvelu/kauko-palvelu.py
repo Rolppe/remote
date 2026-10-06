@@ -20,7 +20,9 @@ HA_AIKA_S = 3
 NUPPI = "input_number.marantz_nupin_kohde"
 NUPPI_MAX = 45
 NAPIT = ["amp_paalle", "amp_pois", "amp_optical", "amp_phono", "amp_mykistys", "lg_paalle", "lg_pois"]
-KOMENNOT = NAPIT + ["aani_ylos", "aani_alas"]
+# Lähde Network (DAC): TV, AirPlay, HA ja palvelimen äänet; HA:ssa skriptinä (RC5x send_raw), ei IR-korttinappina.
+SKRIPTIT = {"amp_network": "script.marantz_lahde_network"}
+KOMENNOT = NAPIT + list(SKRIPTIT) + ["aani_ylos", "aani_alas"]
 
 
 class HaVirhe(Exception):
@@ -49,6 +51,9 @@ def ha(metodi, polku, data=None):
 def aja(nimi):
     if nimi in NAPIT:
         ha("POST", "/api/services/button/press", {"entity_id": "button.ir_kaukosaadin_" + nimi})
+        return
+    if nimi in SKRIPTIT:
+        ha("POST", "/api/services/script/turn_on", {"entity_id": SKRIPTIT[nimi]})
         return
     tila = ha("GET", "/api/states/" + NUPPI)
     try:

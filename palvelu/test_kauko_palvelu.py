@@ -106,6 +106,12 @@ class KaukoPalveluTesti(unittest.TestCase):
                                           {"entity_id": "button.ir_kaukosaadin_amp_paalle"},
                                           "Bearer " + TOKEN)])
 
+    def test_amp_network(self):
+        self.assertEqual(self.pyynto("POST", "/k/amp_network")[0], 200)
+        self.assertEqual(FakeHa.kutsut, [("POST", "/api/services/script/turn_on",
+                                          {"entity_id": "script.marantz_lahde_network"},
+                                          "Bearer " + TOKEN)])
+
     def nuppi(self, komento, kohde):
         FakeHa.kohde = kohde
         self.assertEqual(self.pyynto("POST", "/k/" + komento)[0], 200)
