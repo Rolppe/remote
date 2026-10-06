@@ -398,6 +398,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         do {
             if !valmis { await yhdista() }
             guard valmis else { throw virhe("ei yhteyttä TV:hen") }
+            if Date().timeIntervalSince(netflixAika) >= netflixTuoreus { await herataNaytto() } // kuten RuudukkoHaku
             while !netflixJono.isEmpty {
                 let jono = netflixJono
                 netflixJono = []

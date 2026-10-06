@@ -49,8 +49,9 @@ enum AreenaRuudukko {
         if r == 5 && k.r == 6 { return out + ["DOWN"] }
         if r == 5 { out.append("UP"); r = 4 }
         if k.r >= 5 {
-            // Alas rivin 4 sarakkeesta osuu sen kattavalle leveälle näppäimelle: sivusiirto vain tarvittaessa.
-            let kc = k.r == 6 || (k.c...k.c + 1).contains(c) ? c : k.c
+            // Leveälle näppäimelle aina sen vasemmasta sarakkeesta: ylös palaa sarakkeeseen, josta näppäimelle
+            // tultiin (mitattu 6.10.2026: - → ⌫ → UP = -, Ö → ⌫ → UP = Ö), ja malli olettaa sarakkeen k.c.
+            let kc = k.r == 6 ? c : k.c
             out += Array(repeating: kc < c ? "LEFT" : "RIGHT", count: abs(kc - c))
             return out + Array(repeating: "DOWN", count: k.r - r)
         }
