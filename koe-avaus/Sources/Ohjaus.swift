@@ -3,8 +3,8 @@ import UIKit
 
 // TV-sovelluksen ohjaus (REMOTE-ALOITUS): napit, hakukenttä suoraan kosketuslevyn yläpuolella ja
 // alakolmanneksella kosketuslevy. Hakukentän fokus piilottaa kosketuslevyn puhelimen näppäimistön tieltä; Enter
-// sulkee näppäimistön ja kosketuslevy palaa. Netflixin ja Areenan haku ohjaa niiden kirjainruudukkoa
-// (NetflixHaku.swift, AreenaHaku.swift), muut sovellukset TV:n omaa tekstikenttää (IME), kun se on auki.
+// sulkee näppäimistön ja kosketuslevy palaa. Netflixin, Areenan ja YouTuben haku ohjaa niiden kirjainruudukkoa
+// (NetflixHaku.swift, RuudukkoHaku.swift), muut sovellukset TV:n omaa tekstikenttää (IME), kun se on auki.
 struct TVOhjausView: View {
     let palvelu: Palvelu? // nil = pelkkä kosketuslevy (Laitteet-paneelista)
     @EnvironmentObject private var tv: LGTV
@@ -14,8 +14,16 @@ struct TVOhjausView: View {
     @FocusState private var hakuFokus: Bool
 
     private var netflixHaku: Bool { (palvelu == .netflix || tv.netflix) && !tv.nappaimisto }
-    private var areenaHaku: Bool { (palvelu == .areena || tv.areena) && !tv.nappaimisto && !netflixHaku }
-    private var ruudukkoHaku: Bool { netflixHaku || areenaHaku }
+    // Areenan tai YouTuben ruudukko: TV:n etualalla oleva sovellus ensin, muuten avattu palvelu.
+    private var ruudukko: RuudukkoOhjain? {
+        guard !tv.nappaimisto && !netflixHaku else { return nil }
+        if tv.areena { return tv.areenaHaku }
+        if tv.youtube { return tv.youtubeHaku }
+        if palvelu == .areena { return tv.areenaHaku }
+        if palvelu == .youtube { return tv.youtubeHaku }
+        return nil
+    }
+    private var ruudukkoHaku: Bool { netflixHaku || ruudukko != nil }
     private var profiili: Bool { palvelu == .netflix && tv.profiiliValinta }
 
     var body: some View {
@@ -51,7 +59,7 @@ struct TVOhjausView: View {
         }
         .onChange(of: hakuFokus) { _, auki in
             if auki && netflixHaku { tv.netflixAvaaHaku() }
-            if auki && areenaHaku { tv.areenaHaku.avaaHaku() }
+            if auki { ruudukko?.avaaHaku() }
         }
         .onAppear {
             Task { await tv.yhdista() }
@@ -70,12 +78,12 @@ struct TVOhjausView: View {
                 // Näkymätön alkumerkki: askelpalautin tyhjässä kentässä poistaa merkin TV:n hakukentästä.
                 TextField("", text: Binding(get: { ruudukkoTeksti }, set: { uusi in
                     let tyhja = netflixHaku ? NetflixRuudukko.normalisoi(ruudukkoTeksti).isEmpty
-                                            : AreenaRuudukko.normalisoi(ruudukkoTeksti).isEmpty
+                                            : ruudukko?.tyhja(ruudukkoTeksti) ?? true
                     switch (netflixHaku, uusi.isEmpty && tyhja) {
                     case (true, true): tv.netflixPoista()
                     case (true, false): tv.netflixSyota(vanha: ruudukkoTeksti, uusi: uusi)
-                    case (false, true): tv.areenaHaku.poista()
-                    case (false, false): tv.areenaHaku.syota(vanha: ruudukkoTeksti, uusi: uusi)
+                    case (false, true): ruudukko?.poista()
+                    case (false, false): ruudukko?.syota(vanha: ruudukkoTeksti, uusi: uusi)
                     }
                     ruudukkoTeksti = uusi.isEmpty ? syoteAlku : uusi
                 }))
@@ -85,19 +93,19 @@ struct TVOhjausView: View {
                 .submitLabel(.search)
                 .onSubmit {
                     hakuFokus = false
-                    if netflixHaku { tv.netflixTuloksiin() } else { tv.areenaHaku.tuloksiin() }
+                    if netflixHaku { tv.netflixTuloksiin() } else { ruudukko?.tuloksiin() }
                 }
                 .accessibilityIdentifier("hakukentta")
                 .overlay(alignment: .leading) {
                     if ruudukkoTeksti == syoteAlku {
-                        Text(netflixHaku ? "Hae Netflixistä" : "Hae Areenasta")
+                        Text(netflixHaku ? "Hae Netflixistä" : ruudukko?.paikkamerkki ?? "")
                             .foregroundStyle(.secondary).allowsHitTesting(false)
                     }
                 }
                 if ruudukkoTeksti != syoteAlku || hakuFokus {
                     Button {
                         ruudukkoTeksti = syoteAlku
-                        if netflixHaku { tv.netflixTyhjennaKentta() } else { tv.areenaHaku.tyhjennaKentta() }
+                        if netflixHaku { tv.netflixTyhjennaKentta() } else { ruudukko?.tyhjennaKentta() }
                     } label: {
                         Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary)
                     }

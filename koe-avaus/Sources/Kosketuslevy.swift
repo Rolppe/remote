@@ -63,6 +63,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var nappaimisto = false
     @Published var netflix = false
     @Published var areena = false           // Yle Areena etualalla (AreenaHaku.swift)
+    @Published var youtube = false          // YouTube etualalla (YouTubeHaku.swift)
     @Published var hakee = false
     @Published var etuala: String?          // TV:n etualalla oleva sovellus (appId)
     @Published var kaynnistys: String?      // aloitussivun valinnan eteneminen (Aloitus.swift)
@@ -79,7 +80,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private var vastasi = false // TV vastasi tämän yhteyden ensimmäiseen viestiin
     private var pyyntoNro = 0
     private var odottavat: [String: CheckedContinuation<[String: Any], Error>] = [:]
-    private(set) lazy var areenaHaku = AreenaHaku(tv: self)
+    private(set) lazy var areenaHaku = RuudukkoHaku<AreenaRuudukko>(tv: self)
+    private(set) lazy var youtubeHaku = RuudukkoHaku<YouTubeRuudukko>(tv: self)
     private let netflixViive = 0.05 // 40–80 ms ruudukon sisällä: 0/52 painallusta hukkui (5.10.2026)
 
     override init() {
@@ -201,6 +203,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             if !netflix { netflixPaikka = nil; netflixKasin = false }
             areena = appId == "fi.yle.areena"
             if !areena { areenaHaku.nollaa() }
+            youtube = appId == "youtube.leanback.v4"
+            if !youtube { youtubeHaku.nollaa() }
         }
     }
 
@@ -586,6 +590,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         netflix = false
         areena = false
         areenaHaku.nollaa()
+        youtube = false
+        youtubeHaku.nollaa()
         etuala = nil
         netflixPaikka = nil
         netflixJono = []
@@ -602,6 +608,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func liiku(_ dx: Double, _ dy: Double) {
         netflixPaikka = nil // Netflixin fokus seuraa osoitinta
         areenaHaku.paikka = nil
+        youtubeHaku.paikka = nil
         odotusDx += dx
         odotusDy += dy
         tyhjenna()
@@ -623,9 +630,9 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    func klikkaa() { netflixPaikka = nil; areenaHaku.paikka = nil; osoitinViesti("type:click\n\n") }
-    func vieritä(_ dy: Int) { netflixPaikka = nil; areenaHaku.paikka = nil; osoitinViesti("type:scroll\ndx:0\ndy:\(dy)\n\n") }
-    func nappi(_ nimi: String) { netflixPaikka = nil; areenaHaku.paikka = nil; osoitinViesti("type:button\nname:\(nimi)\n\n") }
+    func klikkaa() { netflixPaikka = nil; areenaHaku.paikka = nil; youtubeHaku.paikka = nil; osoitinViesti("type:click\n\n") }
+    func vieritä(_ dy: Int) { netflixPaikka = nil; areenaHaku.paikka = nil; youtubeHaku.paikka = nil; osoitinViesti("type:scroll\ndx:0\ndy:\(dy)\n\n") }
+    func nappi(_ nimi: String) { netflixPaikka = nil; areenaHaku.paikka = nil; youtubeHaku.paikka = nil; osoitinViesti("type:button\nname:\(nimi)\n\n") }
 
     private func osoitinViesti(_ viesti: String) {
         guard let o = osoitin else { Task { await yhdista() }; return }
