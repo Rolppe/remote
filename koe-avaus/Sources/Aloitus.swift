@@ -112,6 +112,14 @@ extension LGTV {
         }
     }
 
+    // TV pois verkkokomennolla, IR varalla (6.10.2026: näytönsäästäjän aikana ensimmäinen IR-pois vain herätti
+    // TV:n, toinen sammutti; HA: lg_pois 08.09.47 ja 08.09.54, TV off 08.09.58).
+    func sammutaTV() async -> String {
+        await yhdista(aikaraja: 1.5)
+        if valmis, (try? await pyyda("ssap://system/turnOff", [:], aika: 2)) != nil { return "TV pois: OK" }
+        return await lahetaKomento(label: "TV pois (IR)", nimi: "lg_pois")
+    }
+
     // Active = päällä; Screen Off = päällä, kuva pois (kuva päälle); valmiustila = ei päällä.
     // Jos TV ei kerro tilaa, oletetaan päällä oleva (yhteys toimii).
     private func onPaalla() async -> Bool {
