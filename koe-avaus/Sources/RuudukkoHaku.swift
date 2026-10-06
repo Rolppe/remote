@@ -9,6 +9,7 @@ protocol HakuRuudukko {
     static var paikkamerkki: String { get }
     static var askelpalautin: Paikka { get }
     static var tyhjenna: Paikka { get }    // Tyhjennä-näppäin: ylös siitä palaa edelliselle näppäimelle
+    static func poistonPaikka(_ p: Paikka) -> Paikka // askelpalautin paikasta p (YouTube: samalla sivulla)
     static func normalisoi(_ s: String) -> String
     static func siirry(_ p: Paikka, _ k: Paikka) -> [String]
     static func painallukset(_ teksti: String, alku: Paikka) -> ([String], Paikka)
@@ -20,6 +21,7 @@ protocol HakuRuudukko {
 
 extension HakuRuudukko {
     static func sama(_ kuvasta: Paikka, _ odotettu: Paikka) -> Bool { kuvasta == odotettu }
+    static func poistonPaikka(_ p: Paikka) -> Paikka { askelpalautin }
 }
 
 extension LGTV {
@@ -131,8 +133,9 @@ final class RuudukkoHaku<M: HakuRuudukko>: RuudukkoOhjain {
                         tv.tila = "\(M.nimi): valitse tulos kosketuslevyllä"
                         continue
                     case .poista:
-                        napit += M.siirry(q, M.askelpalautin) + ["ENTER"]
-                        q = M.askelpalautin
+                        let k = M.poistonPaikka(q)
+                        napit += M.siirry(q, k) + ["ENTER"]
+                        q = k
                     case .kirjain(let ch):
                         let (n, loppu) = M.painallukset(String(ch), alku: q)
                         napit += n

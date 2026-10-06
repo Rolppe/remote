@@ -76,6 +76,7 @@ enum AreenaTila: Equatable {
     case valilehti(podcastit: Bool)     // TV-ohjelmat alas vie näppäimistölle; Podcastit vain, jos tuloksia on
     case hakunakyma                     // hakunäkymä, fokus tuloksissa tai aiemmissa hauissa
     case sivupalkki(hae: Bool)          // vasen valikko auki; hae = fokus Hae-kohdassa
+    case profiilit(ensimmainen: Bool)   // kylmäkäynnistyksen "Kuka katselee?"; fokus ensimmäisessä profiilissa
     case muu
 }
 
@@ -125,6 +126,12 @@ extension AreenaRuudukko {
             let tv = laske(k, 168...289, 84...87) { $0 > 220 }, podcastit = laske(k, 290...408, 84...87) { $0 > 220 }
             let tila: AreenaTila = max(tv, podcastit) > 60 ? .valilehti(podcastit: podcastit > tv) : .hakunakyma
             return AreenaKuva(tila: tila, hakuteksti: hakuteksti)
+        }
+        // "Kuka katselee?" (kylmäkäynnistys, k1 ja a2 6.10.2026): otsikko ~1480 ja "Muokkaa profiileja" ~550 valkoista
+        // pistettä (muissa kuvissa enintään 1110 ja 0 tai 0 ja 946); ensimmäisen profiilin fokusrengas x 356, y 194–302.
+        if laske(k, 380...580, 95...120, { $0 > 200 }) >= 1000, laske(k, 400...560, 428...446, { $0 > 200 }) >= 300 {
+            let rengas = laske(k, 353...359, 200...296) { $0 > 230 } >= 200 && laske(k, 360...464, 191...197) { $0 > 230 } >= 200
+            return AreenaKuva(tila: .profiilit(ensimmainen: rengas), hakuteksti: false)
         }
         // Avattu sivupalkki: harmaat valikkotekstit (TV … Omat, ~630 pistettä) tummalla paneelilla, jonka
         // alaosa on kokonaan tumma (etusivulla siinä on tekstiä); fokusoitu "Hae" on valkoinen (~55 pistettä).
