@@ -25,7 +25,7 @@ extension AreenaRuudukko: HakuRuudukko {
     @MainActor static func ankkuroi(_ tv: LGTV) async throws -> Paikka {
         var kuva = try await tv.kuvapisteet()
         var k = tunnista(kuva)
-        var vasemmalle = 0, ylos = false, vaihdettu = false
+        var vasemmalle = 0, ylos = false, vaihdettu = false, profiili = 0
         for _ in 0..<12 {
             switch k.tila {
             case .nappain(let p) where p == tyhjenna || p.r == 5:
@@ -58,6 +58,14 @@ extension AreenaRuudukko: HakuRuudukko {
                     ylos = true
                     try await tv.painele(Array(repeating: "UP", count: 8) + ["DOWN"], 0.15)
                 }
+            case .profiilit(let ensimmainen):
+                // Kylmäkäynnistyksen profiiliruutu nieli haun painallukset (laitetesti 6.10.2026): Areenassa on
+                // yksi profiili, joten OK vain kuvasta vahvistetulle ensimmäiselle profiilille.
+                guard profiili < 3 else { throw tv.virhe("valitse Areenan profiili TV:llä") }
+                profiili += 1
+                tv.tila = "Areena: valitaan profiili…"
+                try await tv.painele(ensimmainen ? ["ENTER"] : ["UP", "LEFT", "LEFT"], 0.4)
+                try await Task.sleep(nanoseconds: 1_500_000_000)
             case .muu:
                 guard vasemmalle < 6 else { throw tv.virhe("Areenan hakua ei löytynyt") }
                 tv.tila = "Areena: avataan haku…"
