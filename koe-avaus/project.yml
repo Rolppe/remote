@@ -21,7 +21,7 @@ targets:
     info:
       path: Info.plist
       properties:
-        CFBundleDisplayName: Kauko
+        CFBundleDisplayName: Controller
         UILaunchScreen: {}
         NSLocalNetworkUsageDescription: Sovellus lähettää komentoja kotiverkon palvelimelle.
         NSAppTransportSecurity:
@@ -37,7 +37,7 @@ targets:
     info:
       path: Control/Info.plist
       properties:
-        CFBundleDisplayName: Kauko
+        CFBundleDisplayName: Controller
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true
         NSExtension:
