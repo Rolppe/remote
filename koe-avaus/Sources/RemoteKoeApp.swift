@@ -157,6 +157,7 @@ struct ContentView: View {
                 laitteet = false
                 polku.append(.kosketuslevy)
             }
+            .environmentObject(tv)
         }
         .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
         .onReceive(AaniNapit.shared.$viesti.dropFirst()) { status = $0 }
@@ -198,6 +199,7 @@ struct ContentView: View {
 // Laitteet-paneeli: yksittäiset IR-komennot (v1:n napit) ja pelkkä kosketuslevy.
 struct LaitteetView: View {
     let avaaKosketuslevy: () -> Void
+    @EnvironmentObject private var tv: LGTV
     @Environment(\.dismiss) private var dismiss
     @State private var status = "–"
 
@@ -208,9 +210,9 @@ struct LaitteetView: View {
                     Button(role: .destructive) {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
                         Task {
-                            let a = await lahetaKomento(label: "TV pois", nimi: "lg_pois")
-                            let b = await lahetaKomento(label: "Vahvistin pois", nimi: "amp_pois")
-                            status = a + " · " + b
+                            async let b = lahetaKomento(label: "Vahvistin pois", nimi: "amp_pois")
+                            let a = await tv.sammutaTV()
+                            status = a + " · " + (await b)
                         }
                     } label: {
                         Label("Sammuta kaikki", systemImage: "power")
@@ -236,7 +238,13 @@ struct LaitteetView: View {
                     section("TV")
                     HStack(spacing: 10) {
                         big("Päälle", "lg_paalle")
-                        big("Pois", "lg_pois")
+                        Button {
+                            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                            Task { status = await tv.sammutaTV() }
+                        } label: {
+                            Text("Pois").font(.title3.bold()).frame(maxWidth: .infinity, minHeight: 56)
+                        }
+                        .buttonStyle(.bordered)
                     }
                     Button {
                         UIImpactFeedbackGenerator(style: .medium).impactOccurred()
