@@ -135,4 +135,16 @@ extension AreenaRuudukko {
         }
         return AreenaKuva(tila: .muu, hakuteksti: false)
     }
+
+    // Valittu välilehti on syaani (fokus on vain valkoinen reuna): Podcastit valittuna, kun sen kentässä on
+    // syaania selvästi enemmän kuin TV-ohjelmien (~2000 pistettä tekstin ympärillä, kuvat 6.10.2026).
+    static func podcastitValittu(_ k: Kuvapisteet) -> Bool {
+        func syaani(_ x: ClosedRange<Int>) -> Int {
+            var n = 0
+            for a in x { for b in 92...116 { let (r, g, s) = k.rgb(a, b); if s - r > 100 && g > 150 { n += 1 } } }
+            return n
+        }
+        let tv = syaani(176...282), podcastit = syaani(296...402)
+        return podcastit > 800 && podcastit > tv
+    }
 }

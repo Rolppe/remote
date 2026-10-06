@@ -20,9 +20,12 @@ extension AreenaRuudukko: HakuRuudukko {
     // Fokus näppäimistölle kuvan mukaan: välilehdeltä alas, tuloksista vasemmalle (palaa viimeiseen
     // näppäimeen tai välilehdelle), hakunäkymän ulkopuolelta vasemmalla sivupalkki auki ja Hae.
     // Videon aikana LEFT kelaisi: vasemmalle enintään 6 kertaa.
+    // Podcastit-välilehti valittuna (OK osui välilehteen, a10 6.10.2026) hukkaa nuolia 0,2 s:n tahdilla (a11),
+    // joten haku palaa TV-ohjelmiin: fokus välilehdellä ei vaihda valintaa, OK vaihtaa (mitattu 6.10.2026).
     @MainActor static func ankkuroi(_ tv: LGTV) async throws -> Paikka {
-        var k = tunnista(try await tv.kuvapisteet())
-        var vasemmalle = 0, ylos = false
+        var kuva = try await tv.kuvapisteet()
+        var k = tunnista(kuva)
+        var vasemmalle = 0, ylos = false, vaihdettu = false
         for _ in 0..<12 {
             switch k.tila {
             case .nappain(let p) where p == tyhjenna || p.r == 5:
@@ -30,7 +33,17 @@ extension AreenaRuudukko: HakuRuudukko {
                 // kerro sitä (a7 ja a9 6.10.2026 kirjoittivat ⌫:ltä sarakkeen sivuun) — ylös ja paikka kuvasta.
                 try await tv.painele(["UP"], 0.15)
             case .nappain(let p):
-                return p
+                guard !vaihdettu && podcastitValittu(kuva) else { return p }
+                // A:lta ylös on TV-ohjelmat; sieltä alas palaa A:lle.
+                vaihdettu = true
+                try await tv.painele(siirry(p, Paikka(r: 0, c: 0)) + ["UP"], 0.2)
+                try await tv.painele(["ENTER"], 0.4)
+                try await tv.painele(["DOWN"], 0.2)
+            case .valilehti(let podcastit) where !vaihdettu && podcastitValittu(kuva):
+                vaihdettu = true
+                if podcastit { try await tv.painele(["LEFT"], 0.2) }
+                try await tv.painele(["ENTER"], 0.4)
+                try await tv.painele(["DOWN"], 0.2)
             case .valilehti(let podcastit):
                 // Podcastit-välilehdeltä alas ei liiku, kun tuloksia ei ole ("Ei tuloksia", 6.10.2026).
                 try await tv.painele(podcastit ? ["LEFT", "DOWN"] : ["DOWN"], 0.2)
@@ -52,7 +65,8 @@ extension AreenaRuudukko: HakuRuudukko {
                 try await tv.painele(["LEFT"], 0.2)
             }
             try await Task.sleep(nanoseconds: 500_000_000)
-            k = tunnista(try await tv.kuvapisteet())
+            kuva = try await tv.kuvapisteet()
+            k = tunnista(kuva)
         }
         throw tv.virhe("fokus ei löydy näppäimistöltä")
     }
