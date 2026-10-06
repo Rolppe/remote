@@ -74,7 +74,7 @@ extension LGTV {
         guard p.tvSovellus else { return }
         profiiliValinta = false
         // Oletusprofiili valitaan, jos profiiliruutu ilmestyy tämän ajan sisällä (vahti: Kosketuslevy.swift).
-        // Kylmäkäynnistys: TV:n avaus ≤ 25 s + Netflixin käynnistys.
+        // Kylmäkäynnistys: TV:n avaus ≤ 40 s (mitattu 26–29 s) + Netflixin käynnistys.
         if p == .netflix { netflixOletusAsti = Date().addingTimeInterval(90) }
         kaynnistys = "Yhdistetään TV:hen…"
         defer { kaynnistys = nil }
@@ -87,7 +87,7 @@ extension LGTV {
             kaynnistys = "Avataan TV…"
             _ = await lahetaKomento(label: "TV", nimi: "lg_paalle")
             avattiin = true
-            let raja = Date().addingTimeInterval(25)
+            let raja = Date().addingTimeInterval(40)
             while Date() < raja {
                 try? await Task.sleep(nanoseconds: 1_000_000_000)
                 if !valmis { await yhdista(aikaraja: 2) }
