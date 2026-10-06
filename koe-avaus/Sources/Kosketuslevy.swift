@@ -65,7 +65,7 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var hakee = false
     @Published var etuala: String?          // TV:n etualalla oleva sovellus (appId)
     @Published var kaynnistys: String?      // aloitussivun valinnan eteneminen (Aloitus.swift)
-    @Published var profiiliValinta = false  // Netflixin profiilin valinta liukusäätimellä
+    @Published var profiiliValinta = false  // Netflixin profiilin valinta napauttamalla
     @Published var profiilit: NetflixProfiilit?   // TV:n kuvakaappauksesta tunnistetut profiilit
     @Published var profiiliKuvat: [UIImage] = []  // profiilien omat kuvat (rajaukset kuvakaappauksesta)
 
@@ -244,55 +244,89 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         }
     }
 
-    // Profiilivalinta näkyy vain, kun kuvakaappaus näyttää Netflixin "Kuka katsoo?" -ruudun: kuvaa katsotaan
-    // 0,6 s välein aikaa sekuntia. Osuessa profiilien omat kuvat otetaan talteen ja oletusprofiili valitaan.
-    func netflixProfiiliTarkkailu(aikaa: Double) async {
-        let raja = Date().addingTimeInterval(aikaa)
-        while !Task.isCancelled {
-            if let kuva = try? await kuvakaappausKuva(), let pisteet = Kuvapisteet(kuva),
-               let p = NetflixRuudukko.tunnistaProfiilit(pisteet) {
-                profiilit = p
-                profiiliKuvat = p.ruudut.map { r in
-                    UIGraphicsImageRenderer(size: r.size).image { _ in
-                        UIImage(cgImage: kuva).draw(in: CGRect(x: -r.minX, y: -r.minY, width: 960, height: 540))
-                    }
+    // Netflixin "Kuka katsoo?" -vahti (REMOTE-ALOITUS-KORJAUS): kun Netflix-näkymä on auki, TV:n kuvaa katsotaan
+    // 1,5 s välein (valitun profiilin jälkeen 5 s, haun ajan tauolla). Profiiliruutu näytetään puhelimessa, kun
+    // se ilmestyy TV:lle: kylmäkäynnistyksessä vasta TV:n ja Netflixin heräämisen jälkeen (6.10.2026 10 s:n
+    // tarkkailu ei ehtinyt), ja myös myöhemmin, kun profiilia vaihdetaan TV:llä. Oletusprofiili valitaan vain
+    // käynnistyksen jälkeen (netflixOletusAsti), ei myöhemmässä vaihdossa. Kun TV poistuu profiiliruudulta
+    // (valinta TV:n omalla säätimellä), puhelimen profiilinäkymä sulkeutuu.
+    var netflixOletusAsti = Date.distantPast
+    private var profiiliVahtiTyo: Task<Void, Never>?
+    private var profiiliValitsee = false
+
+    func profiiliVahti(_ paalla: Bool) {
+        profiiliVahtiTyo?.cancel()
+        profiiliVahtiTyo = nil
+        guard paalla else { return }
+        profiiliVahtiTyo = Task { [weak self] in
+            var nakyi = false, valittu = false
+            while !Task.isCancelled {
+                guard let self else { return }
+                if valmis && !hakee && !profiiliValitsee && netflixTyo == nil {
+                    do {
+                        let tulos = try await profiiliKuva()
+                        if Task.isCancelled { return }
+                        if let p = tulos, !nakyi {
+                            profiiliValinta = true
+                            valittu = false
+                            if Date() < netflixOletusAsti,
+                               let oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int,
+                               oletus < p.ruudut.count {
+                                netflixOletusAsti = .distantPast
+                                await profiiliValitse(oletus)
+                            }
+                        } else if tulos == nil && nakyi {
+                            profiiliValinta = false
+                            valittu = true
+                        }
+                        nakyi = tulos != nil
+                    } catch {}
                 }
-                profiiliValinta = true
-                if let oletus = UserDefaults.standard.object(forKey: "netflix_oletusprofiili") as? Int,
-                   oletus < p.ruudut.count {
-                    await profiiliValitse(oletus)
-                }
-                return
+                try? await Task.sleep(nanoseconds: valittu ? 5_000_000_000 : 1_500_000_000)
             }
-            guard Date() < raja else { return }
-            try? await Task.sleep(nanoseconds: 600_000_000)
         }
     }
 
-    // Liukusäädin siirtää TV:n valintaa (lista on pystysuora: alas = seuraava) ja päivittää fokuksen myös täällä.
-    func profiiliSiirto(_ suunta: Int) {
-        nappi(suunta > 0 ? "DOWN" : "UP")
-        guard let p = profiilit else { return }
-        profiilit = NetflixProfiilit(fokus: max(0, min(p.ruudut.count - 1, p.fokus + suunta)), ruudut: p.ruudut)
+    // Yksi kuva: profiilit (ja niiden omat kuvat) talteen, jos TV näyttää profiiliruudun; nil = ei profiiliruutua.
+    // Heittää, jos kuvaa ei saatu, jotta ohimenevä virhe ei sulje profiilinäkymää.
+    private func profiiliKuva() async throws -> NetflixProfiilit? {
+        let kuva = try await kuvakaappausKuva()
+        guard let pisteet = Kuvapisteet(kuva) else { throw virhe("kuvaa ei voi lukea") }
+        guard let p = NetflixRuudukko.tunnistaProfiilit(pisteet) else { return nil }
+        profiilit = p
+        profiiliKuvat = p.ruudut.map { r in
+            UIGraphicsImageRenderer(size: r.size).image { _ in
+                UIImage(cgImage: kuva).draw(in: CGRect(x: -r.minX, y: -r.minY, width: 960, height: 540))
+            }
+        }
+        return p
     }
 
-    // OK vasta, kun TV:n kuva vahvistaa fokuksen (indeksillä: UP ylös asti, DOWN indeksin verran).
-    func profiiliValitse(_ indeksi: Int? = nil) async {
-        guard netflix else { return }
-        if let indeksi {
-            try? await painele(Array(repeating: "UP", count: profiilit?.ruudut.count ?? 8)
-                               + Array(repeating: "DOWN", count: indeksi), 0.15)
-            try? await Task.sleep(nanoseconds: 500_000_000)
+    // Napautettu profiili: fokus siirretään kuvan mukaan erotuksen verran (lista on pystysuora: alas = seuraava),
+    // ja OK lähtee vasta, kun kuva näyttää fokuksen valitussa profiilissa (REMOTE-KOE-TOISTO). Jokainen siirto
+    // tarkistetaan kuvasta: 6.10.2026 sokea UP×n + DOWN×i 0,15 s tahdilla vei fokuksen oikeaan profiiliin, mutta
+    // heti otettu kuva ei vahvistanut sitä (animaatio kesken), joten OK jäi lähtemättä.
+    func profiiliValitse(_ indeksi: Int) async {
+        guard !profiiliValitsee else { return }
+        profiiliValitsee = true
+        defer { profiiliValitsee = false }
+        for _ in 0..<6 {
+            do {
+                guard let nyt = try await profiiliKuva() else { tila = "Netflix: profiiliruutu ei näy TV:llä"; return }
+                if nyt.fokus == indeksi {
+                    nappi("ENTER")
+                    profiiliValinta = false
+                    profiilit = nil
+                    profiiliKuvat = []
+                    tila = "Netflix: profiili valittu"
+                    return
+                }
+                let ero = indeksi - nyt.fokus
+                try await painele(Array(repeating: ero > 0 ? "DOWN" : "UP", count: abs(ero)), 0.3)
+            } catch {}
+            try? await Task.sleep(nanoseconds: 700_000_000)
         }
-        guard let kuva = try? await kuvakaappausKuva(), let pisteet = Kuvapisteet(kuva),
-              let nyt = NetflixRuudukko.tunnistaProfiilit(pisteet), indeksi == nil || nyt.fokus == indeksi else {
-            tila = "Netflix: profiilin fokus ei täsmää — valitse uudelleen"
-            return
-        }
-        nappi("ENTER")
-        profiiliValinta = false
-        profiilit = nil
-        profiiliKuvat = []
+        tila = "Netflix: profiilin fokus ei täsmää — napauta uudelleen"
     }
 
     // Kirjoittaa haun Netflixin ruudukolla sitä mukaa kuin kenttään kirjoitetaan: muutokset jonoon,

@@ -73,6 +73,9 @@ extension LGTV {
         vahvistinLahteelle(p.lahde)
         guard p.tvSovellus else { return }
         profiiliValinta = false
+        // Oletusprofiili valitaan, jos profiiliruutu ilmestyy tämän ajan sisällä (vahti: Kosketuslevy.swift).
+        // Kylmäkäynnistys: TV:n avaus ≤ 25 s + Netflixin käynnistys.
+        if p == .netflix { netflixOletusAsti = Date().addingTimeInterval(90) }
         kaynnistys = "Yhdistetään TV:hen…"
         defer { kaynnistys = nil }
 
@@ -103,9 +106,10 @@ extension LGTV {
             return
         }
         tila = "\(p.nimi) auki"
-        // Profiilivalinta näkyy vain, kun kuvakaappaus näyttää Netflixin profiiliruudun (0,1 s = yksi kuva:
-        // ruutu voi olla jo näkyvissä).
-        if p == .netflix { await netflixProfiiliTarkkailu(aikaa: ennen == "netflix" ? 0.1 : 10) }
+        // Netflix oli jo etualalla: profiiliruutu on joko jo näkyvissä tai ei tule, joten oletus vain heti.
+        if p == .netflix && ennen == "netflix" {
+            netflixOletusAsti = min(netflixOletusAsti, Date().addingTimeInterval(3))
+        }
     }
 
     // Active = päällä; Screen Off = päällä, kuva pois (kuva päälle); valmiustila = ei päällä.
@@ -215,27 +219,41 @@ private struct PhonoKuvake: View {
     }
 }
 
+// Aloitussivu: 4×2-ruudukko ja, kun TV on päällä (yhteys valmis), Takaisin/OK ja kosketuslevy alakolmanneksella
+// (käyttäjä 6.10.2026: Koti vie TV:n kotinäkymään, ja sitä pitää voida ohjata Kaukosta).
 struct AloitusView: View {
     let avaa: (Palvelu) -> Void
     @Binding var laitteet: Bool
+    @EnvironmentObject private var tv: LGTV
     private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4) // 4×2-ruudukko
 
     var body: some View {
-        ScrollView {
-            LazyVGrid(columns: sarakkeet, spacing: 28) {
-                ForEach(Palvelu.allCases) { p in
-                    Button { avaa(p) } label: {
-                        VStack(spacing: 6) {
-                            PalveluKuvake(palvelu: p, koko: 64)
-                            Text(p.nimi).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+        GeometryReader { geo in
+            VStack(spacing: 14) {
+                LazyVGrid(columns: sarakkeet, spacing: 28) {
+                    ForEach(Palvelu.allCases) { p in
+                        Button { avaa(p) } label: {
+                            VStack(spacing: 6) {
+                                PalveluKuvake(palvelu: p, koko: 64)
+                                Text(p.nimi).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+                            }
                         }
+                        .buttonStyle(.plain)
+                        .accessibilityLabel(p.nimi)
                     }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(p.nimi)
+                }
+                .padding(.top, 24)
+                Spacer(minLength: 0)
+                if tv.valmis {
+                    HStack(spacing: 10) {
+                        TVNappi(teksti: "Takaisin", kuva: "arrow.uturn.backward", nimi: "BACK")
+                        TVNappi(teksti: "OK", kuva: "checkmark", nimi: "ENTER")
+                    }
+                    Kosketusalue(tv: tv).frame(height: geo.size.height / 3)
                 }
             }
             .padding(.horizontal)
-            .padding(.top, 24)
+            .padding(.bottom, 8)
         }
         .navigationTitle("Kauko")
         .toolbar {
