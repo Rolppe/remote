@@ -74,8 +74,9 @@ extension LGTV {
         guard p.tvSovellus else { return }
         profiiliValinta = false
         // Oletusprofiili valitaan, jos profiiliruutu ilmestyy tämän ajan sisällä (vahti: Kosketuslevy.swift).
-        // Kylmäkäynnistys: TV:n avaus ≤ 40 s (mitattu 26–29 s) + Netflixin käynnistys.
-        if p == .netflix { netflixOletusAsti = Date().addingTimeInterval(90) }
+        // Kylmäkäynnistys: TV:n avaus ≤ 40 s (mitattu 26–29 s) + sovelluksen käynnistys.
+        let profiilit = p == .netflix || p == .youtube
+        if profiilit { oletusProfiiliAsti = Date().addingTimeInterval(90) }
         kaynnistys = "Yhdistetään TV:hen…"
         defer { kaynnistys = nil }
 
@@ -106,9 +107,10 @@ extension LGTV {
             return
         }
         tila = "\(p.nimi) auki"
-        // Netflix oli jo etualalla: profiiliruutu on joko jo näkyvissä tai ei tule, joten oletus vain heti.
-        if p == .netflix && ennen == "netflix" {
-            netflixOletusAsti = min(netflixOletusAsti, Date().addingTimeInterval(3))
+        // Sovellus oli jo etualalla: profiiliruutu on joko jo näkyvissä tai ei tule, joten oletus vain heti.
+        // YouTube näyttää "Kuka katsoo?" itse vain kylmäkäynnistyksessä (mitattu 6.10.2026).
+        if profiilit && ennen == p.oletusId {
+            oletusProfiiliAsti = min(oletusProfiiliAsti, Date().addingTimeInterval(3))
         }
     }
 

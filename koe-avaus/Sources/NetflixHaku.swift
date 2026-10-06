@@ -100,18 +100,20 @@ struct Kuvapisteet {
     }
 }
 
-// Netflixin "Kuka katsoo?" -ruutu (REMOTE-ALOITUS-PROFIILI): profiilit ovat pystylistana x = 148 ympärillä.
-// ruudut = profiilien neliöt 960×540-kuvassa, fokus = isompana näkyvän (valkoreunaisen) profiilin indeksi.
-struct NetflixProfiilit: Equatable {
-    let fokus: Int
+// "Kuka katsoo?" -ruudun profiilit puhelimen profiilinäkymälle (Netflix ja YouTube): ruudut = profiilien neliöt
+// 960×540-kuvassa, fokus = isompana näkyvän (valkoreunaisen) profiilin indeksi, nil = ei tiedossa.
+struct Profiilit: Equatable {
+    let fokus: Int?
     let ruudut: [CGRect]
 }
+
+// Netflixin "Kuka katsoo?" -ruutu (REMOTE-ALOITUS-PROFIILI): profiilit ovat pystylistana x = 148 ympärillä.
 
 extension NetflixRuudukko {
     // Mitattu 5.10.2026: punainen NETFLIX-sana x 90..<205, y 25..<58 (904–908 pistettä); ruutu on rivi,
     // jonka kohdalla jokin x = 130, 148, 165 on pohjaa (< 45) kirkkaampi. Fokusruudun kehys katkoo
     // jakson, joten ≤ 8 pisteen raot yhdistetään. Fokusruutu 95–96 pistettä, muut 63–64.
-    static func tunnistaProfiilit(_ k: Kuvapisteet) -> NetflixProfiilit? {
+    static func tunnistaProfiilit(_ k: Kuvapisteet) -> Profiilit? {
         var sana = 0
         for x in 90..<205 {
             for y in 25..<58 {
@@ -138,7 +140,7 @@ extension NetflixRuudukko {
             let puoli = Double(j.1 - j.0)
             return CGRect(x: 148 - puoli / 2, y: Double(j.0), width: puoli, height: puoli)
         }
-        return NetflixProfiilit(fokus: fokus, ruudut: ruudut)
+        return Profiilit(fokus: fokus, ruudut: ruudut)
     }
 }
 

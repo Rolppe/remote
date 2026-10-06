@@ -93,7 +93,7 @@ enum YouTubeTila: Equatable {
     case nappain(YouTubeRuudukko.Paikka) // fokus näppäimistöllä (alarivillä c = -1)
     case hakunakyma(Kohta)               // näppäimistö näkyy, fokus muualla
     case tulokset                        // haun tulokset koko ruudulla, näppäimistö piilossa
-    case sivupalkki(haku: Bool)          // vasen valikko auki; haku = fokus Haku-kohdassa
+    case sivupalkki(kohta: Int)          // vasen valikko auki; fokuskohta ylhäältä (0 profiili, 1 Haku)
     case muu
 }
 
@@ -158,7 +158,7 @@ extension YouTubeRuudukko {
         // Avattu sivupalkki: tumma rako x 250 sivupalkin ja sisällön välissä ja fokuskohdan valkoinen pohja.
         if laske(k, 250...250, 90...499, { $0 < 30 }) >= 380 {
             for (i, y) in sivupalkinKohdat.enumerated() where laske(k, 200...230, y - 1...y + 1, { $0 > 200 }) >= 80 {
-                return YouTubeKuva(tila: .sivupalkki(haku: i == 1), hakuteksti: false)
+                return YouTubeKuva(tila: .sivupalkki(kohta: i), hakuteksti: false)
             }
         }
         // Tulokset: "Tietoa tuloksista" oikeassa yläkulmassa ilman näppäimistöä.

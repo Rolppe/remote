@@ -33,8 +33,8 @@ extension YouTubeRuudukko: HakuRuudukko {
                 try await tv.painele(["RIGHT"], 0.15)
             case .tulokset:
                 try await tv.painele(["UP"], 0.15)
-            case .sivupalkki(let haku):
-                if haku {
+            case .sivupalkki(let kohta):
+                if kohta == 1 {
                     try await tv.painele(["RIGHT"], 0.15)
                     try await Task.sleep(nanoseconds: 600_000_000)
                 } else {
