@@ -225,7 +225,7 @@ struct LaitteetView: View {
                     big("Mykistys", "amp_mykistys")
                     section("Lähde")
                     HStack(spacing: 10) {
-                        big("Optical", "amp_optical")
+                        big("Network", "amp_network")
                         big("Phono", "amp_phono")
                     }
                     section("Ääni")

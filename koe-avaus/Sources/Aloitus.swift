@@ -22,7 +22,7 @@ enum Palvelu: String, CaseIterable, Identifiable, Hashable {
     }
 
     var tvSovellus: Bool { self != .phono }
-    var lahde: String { self == .phono ? "amp_phono" : "amp_optical" }
+    var lahde: String { self == .phono ? "amp_phono" : "amp_network" }
 
     // webOS:n tunnetut sovellustunnukset; jos käynnistys epäonnistuu, tunnus haetaan TV:n listasta nimellä.
     var oletusId: String {
