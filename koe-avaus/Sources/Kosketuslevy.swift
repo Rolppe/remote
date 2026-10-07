@@ -71,6 +71,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var profiilit: Profiilit?    // TV:n kuvakaappauksesta tunnistetut profiilit
     @Published var profiiliKuvat: [UIImage] = []  // profiilien omat kuvat (rajaukset kuvakaappauksesta)
     @Published private(set) var profiiliPalvelu: Palvelu? // palvelu, jonka profiiliruutua vahditaan
+    @Published var paalla = true            // TV:n virtatila (Active/Screen Off/Screen Saver); tuntematon = päällä
+    @Published var toisto: String?          // TV:n mediatoisto: "playing" tai "paused", nil = ei toistoa (Aloitus.swift)
+    @Published var toistoApp: String?       // sovellus, jonka media toistaa (appId)
+    var mediaTuki = true                    // com.webos.media vastaa; false → toisto päätellään etualan sovelluksesta
 
     private var session: URLSession!
     private var paa: URLSessionWebSocketTask?
@@ -161,6 +165,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
                                   "uri": "ssap://com.webos.service.ime/registerRemoteKeyboard"])
             try await laheta(ws, ["type": "subscribe", "id": "fg",
                                   "uri": "ssap://com.webos.applicationManager/getForegroundAppInfo"])
+            try await laheta(ws, ["type": "subscribe", "id": "media",
+                                  "uri": "ssap://com.webos.media/getForegroundAppInfo"])
+            try await laheta(ws, ["type": "subscribe", "id": "pwr",
+                                  "uri": "ssap://com.webos.service.tvpower/power/getPowerState"])
             valmis = true
             tila = "Yhdistetty \(Int(Date().timeIntervalSince(t0) * 1000)) ms"
             kuuntele(ws)
@@ -196,6 +204,16 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             return
         }
         let payload = v["payload"] as? [String: Any]
+        if id == "media" {
+            guard v["type"] as? String != "error" else { mediaTuki = false; paivitaToisto(nil); return }
+            let mediat = payload?["foregroundAppInfo"] as? [[String: Any]] ?? []
+            paivitaToisto(mediat.first { ["playing", "paused", "starved"].contains($0["playState"] as? String) })
+            return
+        }
+        if id == "pwr", let tila = payload?["state"] as? String {
+            paalla = ["Active", "Screen Off", "Screen Saver"].contains(tila)
+            return
+        }
         if id == "ime", let widget = payload?["currentWidget"] as? [String: Any] {
             nappaimisto = widget["focus"] as? Bool ?? false
         } else if id == "fg", let appId = payload?["appId"] as? String {
@@ -206,7 +224,34 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
             if !areena { areenaHaku.nollaa() }
             youtube = appId == "youtube.leanback.v4"
             if !youtube { youtubeHaku.nollaa() }
+            if !mediaTuki { toistoApp = Palvelu.tvSovellukset[appId] != nil ? appId : nil; toisto = toistoApp.map { _ in "playing" } }
         }
+    }
+
+    private func paivitaToisto(_ media: [String: Any]?) {
+        let tila = media?["playState"] as? String
+        toisto = tila == nil ? nil : (tila == "paused" ? "paused" : "playing")
+        toistoApp = media?["appId"] as? String
+    }
+
+    // Toisto-ohjaus: media.controls (CONTROL_INPUT_MEDIA_PLAYBACK). Vastausta ei odoteta (VAATIMUS: REMOTE-NOPEA).
+    func toistaTaiTauko() {
+        let tauolle = toisto == "playing"
+        toisto = tauolle ? "paused" : "playing" // tilaus korjaa, jos TV ei totellut
+        mediaKomento("ssap://media.controls/\(tauolle ? "pause" : "play")")
+    }
+
+    // Seuraava ja edellinen jakso ovat sovelluskohtaisia; webOS:ssä ei ole yhteistä näppäintä.
+    func seuraava() { nappi(LGTV.jaksoNappi[toistoApp ?? etuala ?? ""]?.seuraava ?? "FASTFORWARD") }
+    func edellinen() { nappi(LGTV.jaksoNappi[toistoApp ?? etuala ?? ""]?.edellinen ?? "REWIND") }
+    static let jaksoNappi: [String: (seuraava: String, edellinen: String)] = [:]
+
+    private func mediaKomento(_ uri: String) {
+        guard let ws = paa else { return }
+        pyyntoNro += 1
+        let viesti: [String: Any] = ["type": "request", "id": "m\(pyyntoNro)", "uri": uri]
+        guard let data = try? JSONSerialization.data(withJSONObject: viesti) else { return }
+        ws.send(.string(String(decoding: data, as: UTF8.self))) { _ in }
     }
 
     // Pyyntö, jonka vastaus odotetaan pääyhteydeltä (id:llä); aikakatkaisu ettei haku jää jumiin.
@@ -741,6 +786,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         youtube = false
         youtubeHaku.nollaa()
         etuala = nil
+        toisto = nil
+        toistoApp = nil
         netflixPaikka = nil
         netflixJono = []
         netflixKasin = false

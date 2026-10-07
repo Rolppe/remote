@@ -124,6 +124,7 @@ struct RemoteKoeApp: App {
 enum Reitti: Hashable {
     case palvelu(Palvelu)
     case kosketuslevy
+    case toisto(Palvelu?)
 }
 
 // Juuri: aloitussivu (Aloitus.swift) → valinnan ohjausnäkymä (Ohjaus.swift). TV-yhteys elää täällä,
@@ -138,7 +139,8 @@ struct ContentView: View {
 
     var body: some View {
         NavigationStack(path: $polku) {
-            AloitusView(avaa: avaa, laitteet: $laitteet)
+            AloitusView(avaa: avaa, avaaToisto: { polku.append(.toisto(tv.toistoApp.flatMap { Palvelu.tvSovellukset[$0] })) },
+                        laitteet: $laitteet, status: $status)
                 .safeAreaInset(edge: .bottom) {
                     Text(status).font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
                         .padding(.bottom, 6)
@@ -148,6 +150,7 @@ struct ContentView: View {
                     case .palvelu(.phono): PhonoView()
                     case .palvelu(let p): TVOhjausView(palvelu: p)
                     case .kosketuslevy: TVOhjausView(palvelu: nil)
+                    case .toisto(let p): TVOhjausView(palvelu: p)
                     }
                 }
         }

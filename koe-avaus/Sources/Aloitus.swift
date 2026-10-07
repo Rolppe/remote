@@ -22,6 +22,7 @@ enum Palvelu: String, CaseIterable, Identifiable, Hashable {
     }
 
     var tvSovellus: Bool { self != .phono }
+    static let tvSovellukset = Dictionary(uniqueKeysWithValues: allCases.filter(\.tvSovellus).map { ($0.oletusId, $0) })
     var lahde: String { self == .phono ? "amp_phono" : "amp_network" }
 
     // webOS:n tunnetut sovellustunnukset; jos käynnistys epäonnistuu, tunnus haetaan TV:n listasta nimellä.
@@ -223,6 +224,58 @@ private struct LiveTVKuvake: View {
     }
 }
 
+// Toistotila-ruutu (käyttäjä 7.10.2026): näkyy, kun TV toistaa mediaa; kulmassa toistavan palvelun kuvake.
+struct ToistoKuvake: View {
+    let palvelu: Palvelu?
+    var koko: CGFloat = 72
+
+    var body: some View {
+        let muoto = RoundedRectangle(cornerRadius: koko * 0.225, style: .continuous)
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.16, green: 0.78, blue: 0.56), Color(red: 0.04, green: 0.36, blue: 0.33)],
+                           startPoint: .top, endPoint: .bottom)
+            Circle().fill(.white.opacity(0.18)).frame(width: koko * 0.62)
+            Image(systemName: "play.fill")
+                .font(.system(size: koko * 0.3, weight: .bold))
+                .foregroundStyle(.white)
+                .offset(x: koko * 0.025)
+        }
+        .frame(width: koko, height: koko)
+        .clipShape(muoto)
+        .overlay(muoto.stroke(Color.primary.opacity(0.08), lineWidth: 0.5))
+        .overlay(alignment: .bottomTrailing) {
+            if let palvelu { PalveluKuvake(palvelu: palvelu, koko: koko * 0.36).offset(x: koko * 0.06, y: koko * 0.06) }
+        }
+        .shadow(color: .black.opacity(0.18), radius: 3, y: 1.5)
+    }
+}
+
+// Edellinen jakso · toisto/tauko · seuraava jakso (aloitussivu ja ohjausnäkymä, kun TV toistaa mediaa).
+struct ToistoNapit: View {
+    @EnvironmentObject private var tv: LGTV
+
+    var body: some View {
+        HStack(spacing: 10) {
+            nappi("Edellinen", "backward.end.fill") { tv.edellinen() }
+            nappi(tv.toisto == "playing" ? "Tauko" : "Toista", tv.toisto == "playing" ? "pause.fill" : "play.fill") {
+                tv.toistaTaiTauko()
+            }
+            nappi("Seuraava", "forward.end.fill") { tv.seuraava() }
+        }
+    }
+
+    private func nappi(_ teksti: String, _ kuva: String, _ toimi: @escaping () -> Void) -> some View {
+        Button {
+            UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+            toimi()
+        } label: {
+            Image(systemName: kuva).font(.title3).frame(maxWidth: .infinity, minHeight: 46)
+        }
+        .buttonStyle(.bordered)
+        .accessibilityLabel(teksti)
+    }
+}
+
 private struct PhonoKuvake: View {
     let koko: CGFloat
 
@@ -244,32 +297,50 @@ private struct PhonoKuvake: View {
     }
 }
 
-// Aloitussivu: 4×2-ruudukko ja, kun TV on päällä (yhteys valmis), Takaisin/OK ja kosketuslevy alakolmanneksella
-// (käyttäjä 6.10.2026: Koti vie TV:n kotinäkymään, ja sitä pitää voida ohjata Kaukosta).
+// Aloitussivu: palveluruudukko (toistotila-ruutu, kun TV toistaa), TV:n virta ja vahvistimen mykistys, toiston aikana
+// toisto-ohjaus, ja kun TV on päällä, Takaisin/OK ja kosketuslevy alakolmanneksella (käyttäjä 6.10. ja 7.10.2026).
 struct AloitusView: View {
     let avaa: (Palvelu) -> Void
+    let avaaToisto: () -> Void
     @Binding var laitteet: Bool
+    @Binding var status: String
     @EnvironmentObject private var tv: LGTV
-    private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4) // 4×2-ruudukko
+    private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
+    private var toistava: Palvelu? { tv.toistoApp.flatMap { Palvelu.tvSovellukset[$0] } }
 
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 14) {
                 LazyVGrid(columns: sarakkeet, spacing: 28) {
                     ForEach(Palvelu.allCases) { p in
-                        Button { avaa(p) } label: {
-                            VStack(spacing: 6) {
-                                PalveluKuvake(palvelu: p, koko: 64)
-                                Text(p.nimi).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
-                            }
-                        }
-                        .buttonStyle(.plain)
-                        .accessibilityLabel(p.nimi)
+                        ruutu(p.nimi) { avaa(p) } kuvake: { PalveluKuvake(palvelu: p, koko: 64) }
+                    }
+                    if tv.toisto != nil {
+                        ruutu("Toisto") { avaaToisto() } kuvake: { ToistoKuvake(palvelu: toistava, koko: 64) }
                     }
                 }
                 .padding(.top, 24)
                 Spacer(minLength: 0)
-                if tv.valmis {
+                HStack(spacing: 10) {
+                    Button(role: .destructive) {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        Task { status = await tv.sammutaTV() }
+                    } label: {
+                        Label("TV pois", systemImage: "power").font(.headline).frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("TV pois")
+                    Button {
+                        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+                        Task { status = await lahetaKomento(label: "Mykistys", nimi: "amp_mykistys") }
+                    } label: {
+                        Label("Mykistys", systemImage: "speaker.slash").font(.headline).frame(maxWidth: .infinity, minHeight: 46)
+                    }
+                    .buttonStyle(.bordered)
+                    .accessibilityLabel("Mykistys")
+                }
+                if tv.toisto != nil { ToistoNapit() }
+                if tv.valmis && tv.paalla {
                     HStack(spacing: 10) {
                         TVNappi(teksti: "Takaisin", kuva: "arrow.uturn.backward", nimi: "BACK")
                         TVNappi(teksti: "OK", kuva: "checkmark", nimi: "ENTER")
@@ -286,5 +357,16 @@ struct AloitusView: View {
                     .accessibilityLabel("Laitteet")
             }
         }
+    }
+
+    private func ruutu(_ nimi: String, _ toimi: @escaping () -> Void, @ViewBuilder kuvake: () -> some View) -> some View {
+        Button(action: toimi) {
+            VStack(spacing: 6) {
+                kuvake()
+                Text(nimi).font(.caption).foregroundStyle(.primary).lineLimit(1).minimumScaleFactor(0.8)
+            }
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(nimi)
     }
 }

@@ -8,7 +8,6 @@ import UIKit
 struct TVOhjausView: View {
     let palvelu: Palvelu? // nil = pelkkä kosketuslevy (Laitteet-paneelista)
     @EnvironmentObject private var tv: LGTV
-    @Environment(\.dismiss) private var dismiss
     @State private var syote = syoteAlku
     @State private var ruudukkoTeksti = syoteAlku
     @FocusState private var hakuFokus: Bool
@@ -139,11 +138,11 @@ struct TVOhjausView: View {
     @ViewBuilder private var napit: some View {
         VStack(spacing: 10) {
             HStack(spacing: 10) {
+                // Ei Koti-nappia palvelun näkymässä (käyttäjä 7.10.2026): TV:n kotinäkymä on Kaukon aloitussivu.
                 TVNappi(teksti: "Takaisin", kuva: "arrow.uturn.backward", nimi: "BACK")
-                // TV:n aloitusruutu ja Kaukon aloitussivu (kosketuslevyineen) yhdessä: palvelun näkymä ei jää auki.
-                TVNappi(teksti: "Koti", kuva: "house", nimi: "HOME") { dismiss() }
                 TVNappi(teksti: "OK", kuva: "checkmark", nimi: "ENTER")
             }
+            if tv.toisto != nil { ToistoNapit() }
             if palvelu == .liveTV {
                 HStack(spacing: 10) {
                     TVNappi(teksti: "Kanava −", kuva: "chevron.down", nimi: "CHANNELDOWN")
