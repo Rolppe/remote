@@ -114,8 +114,27 @@ struct PiilotettuAanensaadin: UIViewRepresentable {
     func updateUIView(_ v: MPVolumeView, context: Context) {}
 }
 
+// Vaakasuunta vain Areenan ja Netflixin ohjausnäkymässä (REMOTE-VAAKA); muualla pystysuunta.
+final class Suunta: NSObject, UIApplicationDelegate {
+    static var vaaka = false
+
+    func application(_ application: UIApplication,
+                     supportedInterfaceOrientationsFor window: UIWindow?) -> UIInterfaceOrientationMask {
+        Suunta.vaaka ? .allButUpsideDown : .portrait
+    }
+
+    static func salli(_ vaaka: Bool) {
+        self.vaaka = vaaka
+        for case let s as UIWindowScene in UIApplication.shared.connectedScenes {
+            s.keyWindow?.rootViewController?.setNeedsUpdateOfSupportedInterfaceOrientations()
+            if !vaaka { s.requestGeometryUpdate(.iOS(interfaceOrientations: .portrait)) }
+        }
+    }
+}
+
 @main
 struct RemoteKoeApp: App {
+    @UIApplicationDelegateAdaptor(Suunta.self) private var suunta
     var body: some Scene {
         WindowGroup { ContentView() }
     }

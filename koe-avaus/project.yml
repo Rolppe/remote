@@ -25,6 +25,7 @@ targets:
       properties:
         CFBundleDisplayName: Controller
         UILaunchScreen: {}
+        UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         NSLocalNetworkUsageDescription: Sovellus lähettää komentoja kotiverkon palvelimelle.
         NSAppTransportSecurity:
           NSAllowsLocalNetworking: true

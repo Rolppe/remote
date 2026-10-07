@@ -25,11 +25,14 @@ struct TVOhjausView: View {
     private var ruudukkoHaku: Bool { netflixHaku || ruudukko != nil }
     private var profiiliPalvelu: Bool { palvelu == .netflix || palvelu == .youtube }
     private var profiili: Bool { profiiliPalvelu && tv.profiiliValinta }
+    private var vaakaPalvelu: Bool { palvelu == .areena || palvelu == .netflix }
 
     var body: some View {
         GeometryReader { geo in
             VStack(spacing: 14) {
-                if profiili {
+                if vaakaPalvelu && geo.size.width > geo.size.height && !profiili {
+                    VaakaToisto()
+                } else if profiili {
                     Spacer()
                     ProfiiliValinta(tv: tv, palvelu: palvelu ?? .netflix)
                     Spacer()
@@ -64,8 +67,10 @@ struct TVOhjausView: View {
         .onAppear {
             Task { await tv.yhdista() }
             if profiiliPalvelu { tv.profiiliVahti(palvelu) }
+            Suunta.salli(vaakaPalvelu)
         }
         .onDisappear {
+            Suunta.salli(false)
             tv.profiiliVahti(nil)
             tv.profiiliValinta = false
         }
@@ -163,6 +168,43 @@ struct TVOhjausView: View {
                 .accessibilityLabel("Profiili")
             }
         }
+    }
+}
+
+// Vaakanäkymä (REMOTE-VAAKA, käyttäjä 7.10.2026): Areenassa ja Netflixissä vain toisto-ohjaus ja koko leveyden
+// jaksoliukusäädin. Säädin siirtää kohtaan vasta irrotettaessa; kohta tai kesto tuntematon → säädin pois käytöstä.
+struct VaakaToisto: View {
+    @EnvironmentObject private var tv: LGTV
+    @State private var veto: Double?
+
+    var body: some View {
+        VStack(spacing: 18) {
+            Spacer(minLength: 0)
+            ToistoNapit()
+            if let kesto = tv.toistoKesto, kesto > 0 {
+                let kohta = min(veto ?? tv.toistoKohta ?? 0, kesto)
+                Slider(value: Binding(get: { kohta }, set: { veto = $0 }), in: 0...kesto) { alkoi in
+                    if !alkoi, let v = veto { tv.siirry(v); veto = nil }
+                }
+                .accessibilityIdentifier("jaksokohta")
+                HStack {
+                    Text(aika(kohta))
+                    Spacer()
+                    Text("−" + aika(kesto - kohta))
+                }
+                .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
+            } else {
+                Slider(value: .constant(0)).disabled(true).accessibilityIdentifier("jaksokohta")
+                Text("Jakson kohta ei tiedossa").font(.footnote).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func aika(_ s: Double) -> String {
+        let t = Int(s.rounded())
+        return t >= 3600 ? String(format: "%d:%02d:%02d", t / 3600, t / 60 % 60, t % 60)
+                         : String(format: "%d:%02d", t / 60, t % 60)
     }
 }
 
