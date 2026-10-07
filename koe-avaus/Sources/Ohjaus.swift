@@ -172,9 +172,8 @@ struct TVOhjausView: View {
 }
 
 // Vaakanäkymä (REMOTE-VAAKA, käyttäjä 7.10.2026): Areenassa ja Netflixissä vain toisto-ohjaus ja koko leveyden
-// jaksoliukusäädin. Säädin on osuus kestosta ja siirtää vasta irrotettaessa; kesto luetaan TV:n OSD:stä ketjun
-// aikana, joten säädin toimii ennen ensimmäistä lukemaa (REMOTE-VAAKA-AREENA). Netflixissä säädin on pois
-// käytöstä, kunnes sen ketju on mitattu (REMOTE-VAAKA-NETFLIX).
+// jaksoliukusäädin. Säädin on osuus kestosta, ja TV seuraa vetoa (LGTV.siirtoVeto); kesto luetaan TV:n OSD:stä
+// vedon alussa, joten säädin toimii ennen ensimmäistä lukemaa.
 struct VaakaToisto: View {
     @EnvironmentObject private var tv: LGTV
     @State private var veto: Double?
@@ -185,13 +184,14 @@ struct VaakaToisto: View {
             ToistoNapit()
             TimelineView(.periodic(from: .now, by: 1)) { hetki in
                 let kesto = tv.toistoKesto ?? 0
-                let kohta = tv.kohtaNyt(hetki.date)
-                let osuus = veto ?? (kesto > 0 ? (kohta ?? 0) / kesto : 0)
+                let osuus = veto ?? (kesto > 0 ? (tv.kohtaNyt(hetki.date) ?? 0) / kesto : 0)
                 VStack(spacing: 6) {
-                    Slider(value: Binding(get: { osuus }, set: { veto = $0 }), in: 0...1) { alkoi in
-                        if !alkoi, let v = veto { tv.siirry(osuus: v); veto = nil }
+                    Slider(value: Binding(get: { osuus }, set: { veto = $0; tv.siirtoVeto($0, irti: false) }),
+                           in: 0...1) { alkoi in
+                        if alkoi { tv.siirtoVeto(osuus, irti: false) }
+                        else if let v = veto { tv.siirtoVeto(v, irti: true); veto = nil }
                     }
-                    .disabled(!tv.vaakaSaadin || tv.siirtyy)
+                    .disabled(tv.vaakaAsettelu == nil)
                     .accessibilityIdentifier("jaksokohta")
                     HStack {
                         Text(kesto > 0 ? aika(osuus * kesto) : "–:–")
@@ -203,12 +203,12 @@ struct VaakaToisto: View {
                     .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                 }
             }
-            if !tv.vaakaSaadin {
+            if tv.vaakaAsettelu == nil {
                 Text("Jakson kohta ei tiedossa").font(.footnote).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
-        .task { await tv.areenaLueKohta() }
+        .task { await tv.lueKohta() }
     }
 
     private func aika(_ s: Double) -> String {

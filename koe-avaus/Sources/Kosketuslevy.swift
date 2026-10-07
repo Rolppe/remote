@@ -249,10 +249,10 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func edellinen() { nappi(LGTV.jaksoNappi[toistoApp ?? etuala ?? ""]?.edellinen ?? "REWIND") }
     static let jaksoNappi: [String: (seuraava: String, edellinen: String)] = [:]
 
-    // Jakson kohta ja kesto (REMOTE-VAAKA-AREENA): luetaan Areenan tauon OSD:stä (AreenaToisto.swift). Toiston aikana
-    // kohta kasvaa kellon mukana viimeisestä lukemasta; tauko jäädyttää sen.
+    // Jakson kohta ja kesto (REMOTE-VAAKA-AREENA, -NETFLIX): luetaan tauon OSD:stä (ToistoOSD.swift). Toiston
+    // aikana kohta kasvaa kellon mukana viimeisestä lukemasta; tauko jäädyttää sen.
     var kohtaLuettu = Date()
-    var vaakaSaadin: Bool { (toistoApp ?? etuala) == "fi.yle.areena" }
+    var vaakaAsettelu: ToistoAsettelu? { ToistoAsettelu.sovellukselle(toistoApp ?? etuala) }
     @Published var siirtyy = false
 
     func kohtaNyt(_ hetki: Date) -> Double? {
@@ -265,55 +265,76 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
         toistoKohta = kohta; toistoKesto = kesto; kohtaLuettu = Date()
     }
 
-    private func areenaOSD() async throws -> AreenaOSD? {
+    private func lueOSD(_ a: ToistoAsettelu) async throws -> ToistoOSD? {
         let kuva = try await kuvakaappausKuva()
-        return await Task.detached { AreenaToisto.lue(kuva) }.value
+        return await Task.detached { ToistoLukija.lue(kuva, a) }.value
     }
 
     // Vaakanäkymän avautuessa: kohta luetaan vain, jos OSD on jo näkyvissä (tauko). Ei painalluksia, ettei katselu
     // keskeydy; samalla tekstintunnistus latautuu valmiiksi (ensimmäinen kutsu on hidas).
-    func areenaLueKohta() async {
-        guard vaakaSaadin, !siirtyy, let osd = try? await areenaOSD() else { return }
+    func lueKohta() async {
+        guard let a = vaakaAsettelu, !siirtyy, let osd = try? await lueOSD(a) else { return }
         asetaKohta(osd.kohta, osd.kesto)
         toisto = "paused"
     }
 
-    // Siirto jakson kohtaan (osuus 0…1 kestosta), mitattu 7.10.2026: pause → UP (fokus palkkiin) → RIGHT/LEFT × n
-    // (10 s) → kupla todennetaan ja korjataan kerran → play sitoo kohdan (ENTER ei sido, tauko ei sido itsestään).
-    // `VAATIMUS: REMOTE-NOPEA`: yksi ketju per veto; `VAATIMUS: REMOTE-ANDROID`: pelkät näppäimet ja kuvakaappaus.
-    func siirry(osuus: Double) {
-        guard vaakaSaadin, !siirtyy else { return }
+    // Säädin seuraa vetoa TV:llä (käyttäjä 7.10.2026: "säätö pitää alkaa samaan aikaan televisiossa ja seurata
+    // aktiivisesti"). Mitattu ketju 7.10.2026: pause → esikatselu auki (Areena UP; Netflix ensimmäinen nuoli ei
+    // siirrä) → RIGHT/LEFT 10 s askelin vedon mukana → irrotus: kohta todennetaan kuvasta ja korjataan kerran →
+    // play sitoo kohdan (ENTER ei sido, tauko ei sido itsestään). `VAATIMUS: REMOTE-NOPEA`: painallukset lähtevät
+    // vedon aikana, irrotuksen jälkeen vain todennus; `VAATIMUS: REMOTE-ANDROID`: näppäimet ja kuvakaappaus.
+    private var siirtoKohde: Double?        // vedon kohta osuutena kestosta
+    private var siirtoIrti = false
+    private var siirtoTyo: Task<Void, Never>?
+
+    func siirtoVeto(_ osuus: Double, irti: Bool) {
+        guard vaakaAsettelu != nil else { return }
+        siirtoKohde = min(max(osuus, 0), 1)
+        if irti { siirtoIrti = true }
+        guard siirtoTyo == nil else { return }
         siirtyy = true
-        Task {
-            defer { siirtyy = false }
-            do { try await areenaSiirry(osuus) } catch { tila = "Siirto epäonnistui: \(error.localizedDescription)" }
+        siirtoTyo = Task {
+            do { try await siirtoAja() } catch { tila = "Siirto epäonnistui: \(error.localizedDescription)" }
+            siirtoTyo = nil; siirtoKohde = nil; siirtoIrti = false; siirtyy = false
         }
     }
 
-    private func areenaSiirry(_ osuus: Double) async throws {
+    private func siirtoAja() async throws {
+        guard let a = vaakaAsettelu else { return }
         mediaKomento("ssap://media.controls/pause")
         toisto = "paused"
         try await Task.sleep(nanoseconds: 600_000_000)
-        var osd = try await areenaOSD()
+        var osd = try await lueOSD(a)
         for _ in 0..<2 where osd == nil { // OSD ei vielä piirtynyt
             try await Task.sleep(nanoseconds: 400_000_000)
-            osd = try await areenaOSD()
+            osd = try await lueOSD(a)
         }
         guard let alku = osd else { toistaTaiTauko(); throw virhe("jakson kohtaa ei näy") }
-        let kohde = min(max(osuus, 0), 1) * alku.kesto
         asetaKohta(alku.kohta, alku.kesto)
-        try await painele(["UP"], 0.3)
-        var esikatselu = alku.kohta
-        for kierros in 0..<2 { // toinen kierros korjaa hukkuneet painallukset kuplan mukaan
-            let n = AreenaToisto.askeleet(nyt: esikatselu, kohde: kohde)
-            if n == 0 { break }
-            try await painele(Array(repeating: n > 0 ? "RIGHT" : "LEFT", count: abs(n)), 0.06)
-            esikatselu += Double(n) * AreenaToisto.askel
+        if let n = a.avaus { try await painele([n], 0.3) }
+        var esikatselu = alku.kohta, avattu = !a.ensinTyhja, korjattu = false
+        while true {
+            let kohde = (siirtoKohde ?? 0) * alku.kesto
+            let n = ToistoLukija.askeleet(nyt: esikatselu, kohde: kohde)
+            if n != 0 {
+                let suunta = n > 0 ? "RIGHT" : "LEFT"
+                if !avattu { try await painele([suunta], 0.3); avattu = true }
+                try await painele([suunta], 0.06) // yksi askel kerrallaan, jotta veto voi kääntyä
+                esikatselu += n > 0 ? ToistoLukija.askel : -ToistoLukija.askel
+                toistoKohta = min(max(esikatselu, 0), alku.kesto)
+                continue
+            }
+            if !siirtoIrti {
+                try await Task.sleep(nanoseconds: 50_000_000)
+                continue
+            }
+            // Irrotettu ja laskettu kohta saavutettu: hukkuneet painallukset korjataan kerran kuvan mukaan.
+            if korjattu || !avattu { break }
+            korjattu = true
             try await Task.sleep(nanoseconds: 300_000_000)
-            guard kierros == 0, let kupla = try await areenaOSD()?.esikatselu else { break }
-            esikatselu = kupla
+            if let nyt = try await lueOSD(a) { esikatselu = nyt.esikatselu }
         }
-        if esikatselu == alku.kohta { toistaTaiTauko(); return } // ei siirtoa; jatketaan toistoa
+        if !avattu || esikatselu == alku.kohta { toistaTaiTauko(); return } // ei siirtoa; toisto jatkuu
         mediaKomento("ssap://media.controls/play")
         toisto = "playing"
         asetaKohta(min(max(esikatselu, 0), alku.kesto), alku.kesto)
