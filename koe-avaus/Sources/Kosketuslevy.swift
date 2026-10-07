@@ -74,6 +74,8 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     @Published var paalla = true            // TV:n virtatila (Active/Screen Off/Screen Saver); tuntematon = päällä
     @Published var toisto: String?          // TV:n mediatoisto: "playing" tai "paused", nil = ei toistoa (Aloitus.swift)
     @Published var toistoApp: String?       // sovellus, jonka media toistaa (appId)
+    @Published var toistoKohta: Double?     // jakson kohta ja kesto sekunteina (REMOTE-VAAKA); lähde TV:ltä mittaamatta
+    @Published var toistoKesto: Double?
     var mediaTuki = true                    // com.webos.media vastaa; false → toisto päätellään etualan sovelluksesta
 
     private var session: URLSession!
@@ -245,6 +247,17 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     func seuraava() { nappi(LGTV.jaksoNappi[toistoApp ?? etuala ?? ""]?.seuraava ?? "FASTFORWARD") }
     func edellinen() { nappi(LGTV.jaksoNappi[toistoApp ?? etuala ?? ""]?.edellinen ?? "REWIND") }
     static let jaksoNappi: [String: (seuraava: String, edellinen: String)] = [:]
+
+    // Siirto jakson kohtaan (vaakanäkymän liukusäädin): sovelluksen kelausaskel nuolinäppäimellä, taulu tyhjä
+    // kunnes askel on mitattu TV:ltä (VAATIMUS: REMOTE-ANDROID: pelkät näppäimet).
+    func siirry(_ kohta: Double) {
+        guard let nyt = toistoKohta, let askel = LGTV.kelausAskel[toistoApp ?? etuala ?? ""] else { return }
+        let n = Int(((kohta - nyt) / askel).rounded())
+        guard n != 0 else { return }
+        toistoKohta = nyt + Double(n) * askel
+        Task { try? await painele(Array(repeating: n > 0 ? "RIGHT" : "LEFT", count: abs(n)), 0.05) }
+    }
+    static let kelausAskel: [String: Double] = [:]
 
     private func mediaKomento(_ uri: String) {
         guard let ws = paa else { return }
