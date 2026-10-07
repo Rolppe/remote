@@ -172,7 +172,9 @@ struct TVOhjausView: View {
 }
 
 // Vaakanäkymä (REMOTE-VAAKA, käyttäjä 7.10.2026): Areenassa ja Netflixissä vain toisto-ohjaus ja koko leveyden
-// jaksoliukusäädin. Säädin siirtää kohtaan vasta irrotettaessa; kohta tai kesto tuntematon → säädin pois käytöstä.
+// jaksoliukusäädin. Säädin on osuus kestosta ja siirtää vasta irrotettaessa; kesto luetaan TV:n OSD:stä ketjun
+// aikana, joten säädin toimii ennen ensimmäistä lukemaa (REMOTE-VAAKA-AREENA). Netflixissä säädin on pois
+// käytöstä, kunnes sen ketju on mitattu (REMOTE-VAAKA-NETFLIX).
 struct VaakaToisto: View {
     @EnvironmentObject private var tv: LGTV
     @State private var veto: Double?
@@ -181,24 +183,32 @@ struct VaakaToisto: View {
         VStack(spacing: 18) {
             Spacer(minLength: 0)
             ToistoNapit()
-            if let kesto = tv.toistoKesto, kesto > 0 {
-                let kohta = min(veto ?? tv.toistoKohta ?? 0, kesto)
-                Slider(value: Binding(get: { kohta }, set: { veto = $0 }), in: 0...kesto) { alkoi in
-                    if !alkoi, let v = veto { tv.siirry(v); veto = nil }
+            TimelineView(.periodic(from: .now, by: 1)) { hetki in
+                let kesto = tv.toistoKesto ?? 0
+                let kohta = tv.kohtaNyt(hetki.date)
+                let osuus = veto ?? (kesto > 0 ? (kohta ?? 0) / kesto : 0)
+                VStack(spacing: 6) {
+                    Slider(value: Binding(get: { osuus }, set: { veto = $0 }), in: 0...1) { alkoi in
+                        if !alkoi, let v = veto { tv.siirry(osuus: v); veto = nil }
+                    }
+                    .disabled(!tv.vaakaSaadin || tv.siirtyy)
+                    .accessibilityIdentifier("jaksokohta")
+                    HStack {
+                        Text(kesto > 0 ? aika(osuus * kesto) : "–:–")
+                        Spacer()
+                        if tv.siirtyy { ProgressView().controlSize(.small) }
+                        Spacer()
+                        Text(kesto > 0 ? "−" + aika(kesto - osuus * kesto) : "–:–")
+                    }
+                    .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
                 }
-                .accessibilityIdentifier("jaksokohta")
-                HStack {
-                    Text(aika(kohta))
-                    Spacer()
-                    Text("−" + aika(kesto - kohta))
-                }
-                .font(.footnote.monospacedDigit()).foregroundStyle(.secondary)
-            } else {
-                Slider(value: .constant(0)).disabled(true).accessibilityIdentifier("jaksokohta")
+            }
+            if !tv.vaakaSaadin {
                 Text("Jakson kohta ei tiedossa").font(.footnote).foregroundStyle(.secondary)
             }
             Spacer(minLength: 0)
         }
+        .task { await tv.areenaLueKohta() }
     }
 
     private func aika(_ s: Double) -> String {
