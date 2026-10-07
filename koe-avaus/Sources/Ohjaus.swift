@@ -173,7 +173,7 @@ struct TVOhjausView: View {
 
 // Vaakanäkymä (REMOTE-VAAKA, käyttäjä 7.10.2026): Areenassa ja Netflixissä vain toisto-ohjaus ja koko leveyden
 // jaksoliukusäädin. Säädin on osuus kestosta, ja TV seuraa vetoa (LGTV.siirtoVeto); kesto luetaan TV:n OSD:stä
-// vedon alussa, joten säädin toimii ennen ensimmäistä lukemaa.
+// vedon alussa, joten säädin toimii ennen ensimmäistä lukemaa. Irrotuksen jälkeen säädin odottaa TV:tä.
 struct VaakaToisto: View {
     @EnvironmentObject private var tv: LGTV
     @State private var veto: Double?
@@ -189,7 +189,7 @@ struct VaakaToisto: View {
                     Slider(value: Binding(get: { osuus }, set: { veto = $0; tv.siirtoVeto($0, irti: false) }),
                            in: 0...1) { alkoi in
                         if alkoi { tv.siirtoVeto(osuus, irti: false) }
-                        else if let v = veto { tv.siirtoVeto(v, irti: true); veto = nil }
+                        else if let v = veto { tv.siirtoVeto(v, irti: true) } // veto jää näkyviin, ks. onChange
                     }
                     .disabled(tv.vaakaAsettelu == nil)
                     .accessibilityIdentifier("jaksokohta")
@@ -209,6 +209,8 @@ struct VaakaToisto: View {
             Spacer(minLength: 0)
         }
         .task { await tv.lueKohta() }
+        // Säädin pysyy irrotuskohdassa, kunnes TV on siinä ja toistaa (käyttäjä 7.10.2026); sitten se seuraa TV:tä.
+        .onChange(of: tv.siirtyy) { _, siirtaa in if !siirtaa { veto = nil } }
     }
 
     private func aika(_ s: Double) -> String {

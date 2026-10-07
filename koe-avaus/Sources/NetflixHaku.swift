@@ -165,16 +165,20 @@ extension NetflixRuudukko {
             (0..<rivi.count).map { c in Solu(p: Paikka(r: r, c: c), x: 50 + 33 * c, y: 112 + 33 * r, puoli: 15) }
         }
 
-    // Fokusruudun valkoinen kehys: keskiarvo kehyksen kohdalta (kirkkaus ~155–190, muut ~22).
-    private static func rengas(_ k: Kuvapisteet, _ s: Solu, _ dy: Int) -> Double {
-        var summa = 0.0, n = 0
-        for d in (-s.puoli + 2)..<(s.puoli - 1) {
-            for (a, b) in [(s.x + d, s.y + dy - 15), (s.x + d, s.y + dy + 15),
-                           (s.x - s.puoli, s.y + dy + d / 3), (s.x + s.puoli, s.y + dy + d / 3)] {
-                summa += k.kirkkaus(a, b); n += 1
+    // Fokus on kirkas kirjain tai kuvake ilman kehystä (Netflixin käyttöliittymä 7.10.2026, kuvat nfx/o01–o05;
+    // 5.10.2026 mitattu valkoinen kehys ei enää päde). Muiden kirjainten kirkkain piste ~145, fokuksen 227–255.
+    // Kokonaan valkoinen ruutu (osoittimen korostus, ajo nh1) ei ole fokus: siinä yli puolet pisteistä on kirkkaita,
+    // kirjaimessa enintään ~0,2. 7.10.2026 vanha kehystunnistin luki laatikon fokukseksi → väärät kirjaimet.
+    private static func fokusMerkki(_ k: Kuvapisteet, _ s: Solu, _ dy: Int) -> Bool {
+        var suurin = 0.0, kirkkaat = 0, n = 0
+        for i in -8...8 {
+            for j in -6...6 {
+                let v = k.kirkkaus(s.x + i, s.y + dy + j)
+                suurin = max(suurin, v); n += 1
+                if v > 200 { kirkkaat += 1 }
             }
         }
-        return summa / Double(n)
+        return suurin > 220 && Double(kirkkaat) / Double(n) < 0.5
     }
 
     private static func laske(_ k: Kuvapisteet, _ x: ClosedRange<Int>, _ y: ClosedRange<Int>, yli: Double) -> Int {
@@ -186,11 +190,11 @@ extension NetflixRuudukko {
     static func tunnista(_ k: Kuvapisteet) -> NetflixKuva {
         let hakuteksti = laske(k, 281...289, 62...84, yli: 150) == 0 && laske(k, 292...306, 62...84, yli: 150) > 5
         // Näppäimistö voi olla siirtynyt muutaman pisteen (vierityksen animaatio).
-        var paras: [(Double, Paikka)] = []
+        var fokus: Paikka?
         var hakunakyma = 0
         for dy in stride(from: -10, through: 10, by: 2) {
-            let p = solut.map { (rengas(k, $0, dy), $0.p) }.sorted { $0.0 > $1.0 }
-            if paras.isEmpty || p[0].0 > paras[0].0 { paras = p }
+            let osumat = solut.filter { fokusMerkki(k, $0, dy) }
+            if fokus == nil && osumat.count == 1 { fokus = osumat[0].p }
             // Ruutujen tasaisen harmaa pohja (~26) ja musta rako (~2) niiden välissä.
             hakunakyma = max(hakunakyma, solut.filter { $0.puoli == 15 }.filter { s in
                 let pohja = k.kirkkaus(s.x - 11, s.y - 11 + dy)
@@ -198,7 +202,8 @@ extension NetflixRuudukko {
                 return (18...40).contains(pohja) && rako < 12
             }.count)
         }
-        if paras[0].0 > 100 && paras[1].0 < 60 { return NetflixKuva(tila: .nappain(paras[0].1), hakuteksti: hakuteksti) }
+        // Vain näkyvällä näppäimistöllä: kotinäkymän kirkkaat tekstit osuvat moneen ruutuun.
+        if let p = fokus, hakunakyma >= 30 { return NetflixKuva(tila: .nappain(p), hakuteksti: hakuteksti) }
         if laske(k, 246...265, 18...37, yli: 200) > 200 { return NetflixKuva(tila: .nav, hakuteksti: hakuteksti) }
         let genre = stride(from: 100, to: 540, by: 2).contains { y in [40, 120, 200].allSatisfy { k.kirkkaus($0, y) > 200 } }
         if genre { return NetflixKuva(tila: .genre, hakuteksti: hakuteksti) }
