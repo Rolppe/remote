@@ -13,7 +13,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlsplit
 
 PORTTI = int(os.environ.get("KAUKO_PORT", "8090"))
-HA_URL = os.environ.get("HA_URL", "http://192.0.2.10:8123").rstrip("/")
+URL_FILE = os.path.expanduser(os.environ.get("HA_URL_FILE", "~/.config/ha/url"))
 TOKEN_FILE = os.path.expanduser(os.environ.get("HA_TOKEN_FILE", "~/.config/ha/token"))
 LUKKO = os.path.expanduser(os.environ.get("KAUKO_LOCK", "~/.local/state/kauko-palvelu.lock"))
 HA_AIKA_S = 3
@@ -29,12 +29,26 @@ class HaVirhe(Exception):
     pass
 
 
+def ha_url():
+    # HA:n osoite ympäristöstä (HA_URL) tai tiedostosta (HA_URL_FILE); ei oletusosoitetta.
+    url = os.environ.get("HA_URL", "")
+    if not url:
+        try:
+            url = open(URL_FILE).read()
+        except OSError:
+            pass
+    return url.strip().rstrip("/")
+
+
 def ha(metodi, polku, data=None):
+    url = ha_url()
+    if not url:
+        raise HaVirhe("url")
     try:
         token = open(TOKEN_FILE).read().strip()
     except OSError:
         raise HaVirhe("token")
-    req = urllib.request.Request(HA_URL + polku, method=metodi,
+    req = urllib.request.Request(url + polku, method=metodi,
                                  data=None if data is None else json.dumps(data).encode(),
                                  headers={"Authorization": "Bearer " + token, "Content-Type": "application/json"})
     try:
@@ -126,6 +140,7 @@ class Palvelin(ThreadingHTTPServer):
 
 def tarkista():
     tulos = {}
+    tulos["url"] = bool(ha_url())
     tulos["token"] = os.access(TOKEN_FILE, os.R_OK)
     try:
         ha("GET", "/api/")
@@ -141,7 +156,7 @@ def tarkista():
     finally:
         s.close()
     print("preflight: " + " ".join("%s=%s" % (k, "ok" if v else "VIRHE") for k, v in tulos.items())
-          + " (portti %d, %s)" % (PORTTI, HA_URL), flush=True)
+          + " (portti %d, %s)" % (PORTTI, ha_url() or "HA-osoite puuttuu"), flush=True)
     return 0 if all(tulos.values()) else 1
 
 

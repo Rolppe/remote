@@ -1,0 +1,5 @@
+// Yhteiset asetukset. Oma tiimi ja etuliite kuuluvat tiedostoon Local.xcconfig (ei versionhallintaan):
+// kopioi Local.xcconfig.example -> Local.xcconfig ja täytä arvot.
+DEVELOPMENT_TEAM =
+BUNDLE_ID_PREFIX = com.example
+#include? "Local.xcconfig"

@@ -303,6 +303,7 @@ struct AloitusView: View {
     let avaa: (Palvelu) -> Void
     let avaaToisto: () -> Void
     @Binding var laitteet: Bool
+    @Binding var asetukset: Bool
     @Binding var status: String
     @EnvironmentObject private var tv: LGTV
     private let sarakkeet = Array(repeating: GridItem(.flexible(), spacing: 10), count: 4)
@@ -355,6 +356,10 @@ struct AloitusView: View {
             ToolbarItem(placement: .topBarTrailing) {
                 Button { laitteet = true } label: { Image(systemName: "slider.horizontal.3") }
                     .accessibilityLabel("Laitteet")
+            }
+            ToolbarItem(placement: .topBarLeading) {
+                Button { asetukset = true } label: { Image(systemName: "gearshape") }
+                    .accessibilityLabel("Asetukset")
             }
         }
     }

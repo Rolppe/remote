@@ -6,7 +6,7 @@ import XCTest
 final class YouTubeProfiiliTesti: XCTestCase {
     func testYouTubeProfiilinNapautus() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let youtube = app.buttons["YouTube"]
         XCTAssertTrue(youtube.waitForExistence(timeout: 10), "aloitussivun YouTube-nappia ei löydy")
         youtube.tap()

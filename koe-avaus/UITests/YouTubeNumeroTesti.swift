@@ -5,7 +5,7 @@ import XCTest
 final class YouTubeNumeroTesti: XCTestCase {
     func testYouTubeNumerot() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let youtube = app.buttons["YouTube"]
         XCTAssertTrue(youtube.waitForExistence(timeout: 10), "aloitussivun YouTube-nappia ei löydy")
         youtube.tap()
