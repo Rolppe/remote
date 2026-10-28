@@ -4,8 +4,6 @@ import Darwin
 import AVFoundation
 import MediaPlayer
 
-let baseURL = "http://192.0.2.10:8090"
-
 func processStartMs() -> Double {
     var info = kinfo_proc()
     var size = MemoryLayout<kinfo_proc>.stride
@@ -32,7 +30,8 @@ func allekirjoitusVaroitus() -> String? {
 
 func lahetaKomento(label: String, nimi: String) async -> String {
     let now = Int(Date().timeIntervalSince1970 * 1000)
-    guard let url = URL(string: baseURL + "/k/" + nimi + "?t=\(now)") else { return "\(label): virheellinen osoite" }
+    guard let base = Osoitteet.palveluURL else { return "\(label): aseta palvelun osoite (asetukset)" }
+    guard let url = URL(string: base + "/k/" + nimi + "?t=\(now)") else { return "\(label): virheellinen osoite" }
     var req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
     req.httpMethod = "POST"
     let t0 = Date()
@@ -153,13 +152,14 @@ struct ContentView: View {
     @StateObject private var tv = LGTV()
     @State private var polku: [Reitti] = []
     @State private var laitteet = false
+    @State private var asetukset = !Osoitteet.valmis
     @State private var status = ""
     @State private var firstActive = true
 
     var body: some View {
         NavigationStack(path: $polku) {
             AloitusView(avaa: avaa, avaaToisto: { polku.append(.toisto(tv.toistoApp.flatMap { Palvelu.tvSovellukset[$0] })) },
-                        laitteet: $laitteet, status: $status)
+                        laitteet: $laitteet, asetukset: $asetukset, status: $status)
                 .safeAreaInset(edge: .bottom) {
                     Text(status).font(.footnote).monospacedDigit().foregroundStyle(.secondary).lineLimit(2)
                         .padding(.bottom, 6)
@@ -180,6 +180,9 @@ struct ContentView: View {
                 polku.append(.kosketuslevy)
             }
             .environmentObject(tv)
+        }
+        .sheet(isPresented: $asetukset) {
+            AsetuksetView { Task { await tv.yhdista(aikaraja: 3) } }
         }
         .background(PiilotettuAanensaadin().frame(width: 1, height: 1))
         .onReceive(AaniNapit.shared.$viesti.dropFirst()) { status = $0 }
@@ -212,7 +215,8 @@ struct ContentView: View {
         let painallus = UserDefaults.standard.integer(forKey: "painallus_ms")
         UserDefaults.standard.removeObject(forKey: "painallus_ms")
         let lisa = painallus > 0 && now - painallus < 30000 ? "&painallus=\(painallus)" : ""
-        guard let url = URL(string: baseURL + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)" + lisa) else { return }
+        guard let base = Osoitteet.palveluURL,
+              let url = URL(string: base + "/ping?vaihe=active&launch_ms=\(launch)&t=\(now)" + lisa) else { return }
         let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 3)
         _ = try? await URLSession.shared.data(for: req)
     }
@@ -305,5 +309,48 @@ struct LaitteetView: View {
                 .frame(maxWidth: .infinity, minHeight: 56)
         }
         .buttonStyle(.borderedProminent)
+    }
+}
+
+// Asetukset: palvelun ja TV:n osoite tallennetaan laitteelle (Osoitteet.swift). Ei oletusarvoja.
+struct AsetuksetView: View {
+    let tallennettu: () -> Void
+    @Environment(\.dismiss) private var dismiss
+    @AppStorage(Osoitteet.palveluAvain) private var palvelu = ""
+    @AppStorage(Osoitteet.tvAvain) private var tvOsoite = ""
+
+    var body: some View {
+        NavigationStack {
+            Form {
+                Section {
+                    TextField("esim. palvelin.local:8090", text: $palvelu)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel("Palvelun osoite")
+                } header: {
+                    Text("Palvelun osoite")
+                } footer: {
+                    Text("Kauko-palvelu (portti 8090, jos porttia ei anneta).")
+                }
+                Section {
+                    TextField("esim. 192.0.2.10", text: $tvOsoite)
+                        .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .accessibilityLabel("TV:n osoite")
+                } header: {
+                    Text("TV:n osoite")
+                } footer: {
+                    Text("LG webOS -television IP-osoite tai nimi.")
+                }
+                if !Osoitteet.valmis {
+                    Text("Aseta molemmat osoitteet, jotta ohjaus toimii.").foregroundStyle(.secondary)
+                }
+            }
+            .navigationTitle("Asetukset")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .topBarTrailing) {
+                    Button("Valmis") { dismiss(); tallennettu() }.bold()
+                }
+            }
+        }
     }
 }

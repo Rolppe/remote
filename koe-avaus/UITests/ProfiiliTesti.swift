@@ -5,7 +5,7 @@ import XCTest
 final class ProfiiliTesti: XCTestCase {
     func testNetflixProfiilinNapautus() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let netflix = app.buttons["Netflix"]
         XCTAssertTrue(netflix.waitForExistence(timeout: 10), "aloitussivun Netflix-nappia ei löydy")
         netflix.tap()

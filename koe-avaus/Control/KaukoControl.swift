@@ -10,7 +10,7 @@ struct KaukoControlBundle: WidgetBundle {
 
 struct KaukoControl: ControlWidget {
     var body: some ControlWidgetConfiguration {
-        StaticControlConfiguration(kind: "com.example.remote.control") {
+        StaticControlConfiguration(kind: "remote.control") {
             ControlWidgetButton(action: OpenKaukoIntent()) {
                 Label("Controller", systemImage: "av.remote")
             }

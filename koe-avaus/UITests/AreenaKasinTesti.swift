@@ -6,7 +6,7 @@ import XCTest
 final class AreenaKasinTesti: XCTestCase {
     func testAreenaKasin() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let areena = app.buttons["Yle Areena"]
         XCTAssertTrue(areena.waitForExistence(timeout: 10), "aloitussivun Areena-nappia ei löydy")
         areena.tap()

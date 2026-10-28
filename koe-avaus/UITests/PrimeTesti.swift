@@ -5,7 +5,7 @@ import XCTest
 final class PrimeTesti: XCTestCase {
     func testPrimeKaynnistys() throws {
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let prime = app.buttons["Prime Video"]
         XCTAssertTrue(prime.waitForExistence(timeout: 10), "aloitussivun Prime Video -nappia ei löydy")
         prime.tap()

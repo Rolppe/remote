@@ -10,7 +10,8 @@ struct OpenKaukoIntent: AppIntent {
         UserDefaults.standard.set(t, forKey: "painallus_ms")
         let proc = Bundle.main.bundleIdentifier ?? "-"
         Task {
-            guard let url = URL(string: "http://192.0.2.10:8090/ping?vaihe=painallus&t=\(t)&proc=\(proc)") else { return }
+            guard let base = Osoitteet.palveluURL,
+                  let url = URL(string: base + "/ping?vaihe=painallus&t=\(t)&proc=\(proc)") else { return }
             let req = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 2)
             _ = try? await URLSession.shared.data(for: req)
         }

@@ -16,7 +16,7 @@ import UIKit
 
 let syoteAlku = "\u{200B}" // näkymätön merkki: puhelimen askelpalautin poistaa merkkejä myös TV:ltä
 
-let tvHost = "192.0.2.10"
+var tvHost: String { Osoitteet.tv }
 private let avainKey = "lgtv_client_key"
 
 // Sama manifesti kuin bscpylgtv:llä (LG:n testiallekirjoitus); TV hyväksyy sen kerran ruudulla.
@@ -121,9 +121,13 @@ final class LGTV: NSObject, ObservableObject, URLSessionWebSocketDelegate {
     private func yhdistaNyt(_ aikaraja: Double) async {
         katkaise()
         let t0 = Date()
+        guard !tvHost.isEmpty, let tvURL = URL(string: "wss://\(tvHost):3001") else {
+            tila = "Aseta TV:n osoite (asetukset)"
+            return
+        }
         tila = "Yhdistetään TV:hen…"
         do {
-            let ws = session.webSocketTask(with: URL(string: "wss://\(tvHost):3001")!)
+            let ws = session.webSocketTask(with: tvURL)
             ws.resume()
             paa = ws
             vastasi = false

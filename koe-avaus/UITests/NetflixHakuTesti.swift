@@ -7,7 +7,7 @@ final class NetflixHakuTesti: XCTestCase {
     func testNetflixHaku() throws {
         continueAfterFailure = false // 7.10.2026 ajo nh1 jatkoi karanneella fokuksella ja avasi Cobra Kain
         let app = XCUIApplication()
-        app.launch()
+        app.kaynnista()
         let netflix = app.buttons["Netflix"]
         XCTAssertTrue(netflix.waitForExistence(timeout: 10), "aloitussivun Netflix-nappia ei löydy")
         netflix.tap()

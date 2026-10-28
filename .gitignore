@@ -1,1 +1,6 @@
 __pycache__/
+koe-avaus/Config/Local.xcconfig
+koe-avaus/build/
+koe-avaus/*.xcodeproj
+koe-avaus/Info.plist
+koe-avaus/Control/Info.plist
