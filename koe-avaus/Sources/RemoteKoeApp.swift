@@ -332,7 +332,7 @@ struct AsetuksetView: View {
                     Text("Kauko-palvelu (portti 8090, jos porttia ei anneta).")
                 }
                 Section {
-                    TextField("esim. 192.0.2.10", text: $tvOsoite)
+                    TextField("esim. tv.local", text: $tvOsoite)
                         .keyboardType(.URL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         .accessibilityLabel("TV:n osoite")
                 } header: {
