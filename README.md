@@ -50,6 +50,9 @@ Asetukset:
 | `KAUKO_LOCK` | `~/.local/state/kauko-palvelu.lock` | lukko: vain yksi instanssi kerrallaan |
 
 Lukon ansiosta palvelun voi käynnistää cronista minuutin välein; ylimääräinen käynnistys päättyy heti.
+Esimerkki `/etc/cron.d/kauko`-tiedostoksi (korvaa `<KAYTTAJA>` ja `<POLKU>`):
+
+    * * * * * <KAYTTAJA> HA_URL=http://homeassistant.local:8123 python3 <POLKU>/palvelu/kauko-palvelu.py >> /tmp/kauko-palvelu.loki 2>&1
 
 Home Assistantissa palvelu odottaa näitä entiteettejä:
 
