@@ -1,5 +1,7 @@
 # Kauko
 
+[![CI](https://github.com/Rolppe/remote/actions/workflows/ci.yml/badge.svg)](https://github.com/Rolppe/remote/actions/workflows/ci.yml)
+
 <img src="koe-avaus/Resources/Assets.xcassets/AppIcon.appiconset/AppIcon-1024.png" alt="App icon: a TV remote" width="96" align="right">
 
 An iPhone remote for an LG webOS TV and for an amplifier that is controlled over infrared through Home Assistant.
@@ -24,6 +26,10 @@ that do not open the TV's own keyboard it types into their on-screen letter grid
 - **Control Center button** (iOS 18 control widget) opens the app from the lock screen.
 
 ## Visual
+
+<img src="docs/images/home-screen.png" alt="Start screen with service tiles: Live TV, Netflix, Phono, Yle Areena, Prime Video, YouTube, and TV off and mute buttons" width="300">
+
+*Start screen (UI text is Finnish) in the iOS simulator, built with `xcodegen generate` and `xcodebuild` and launched with placeholder addresses from the documentation range (192.0.2.x), so no TV or service is connected. It shows only the static layout: tiles and buttons. Every feature that talks to the TV needs a real LG webOS TV.*
 
 ```mermaid
 flowchart LR
@@ -176,7 +182,7 @@ Endpoints: `GET /ping`, `GET /komennot`, `POST /k/<command>`.
       TEST_RUNNER_KAUKO_PALVELU=<address> TEST_RUNNER_KAUKO_TV=<address> \
         xcodebuild -project RemoteKoe.xcodeproj -scheme RemoteKoe -destination '<simulator>' test
 
-  I did not run these for this documentation. There is no CI and no unit test target for the pixel classifiers.
+  I did not run these for this documentation. CI runs only the service tests; there is no unit test target for the pixel classifiers.
   Several tests also expect a Mac-side helper that photographs the TV during the run (see the test comments); that
   helper is not in this repository.
 
@@ -209,7 +215,7 @@ More in [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md).
   portable.
 - The `kuvake-*.png` files in `koe-avaus/Resources` are third-party service logos (Netflix, Yle Areena, Prime Video,
   YouTube) and are not covered by this license.
-- The 8 UI tests need real hardware; there is no CI.
+- The 8 UI tests need real hardware; CI (GitHub Actions) covers only the Python service tests.
 
 ## License
 
