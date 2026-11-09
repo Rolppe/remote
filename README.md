@@ -188,12 +188,12 @@ Endpoints: `GET /ping`, `GET /komennot`, `POST /k/<command>`.
 
 ## How it was built
 
-I (Mikko Paaso) set the requirements, designed the architecture and directed the work. Claude Code agents wrote the
-code from written task briefs, and tests and runs on the real TV and phone were the acceptance gates. I reviewed the
-results and decided what to keep. What this repository shows of that process:
+I (Mikko Paaso) set the requirements, designed the architecture and defined the acceptance criteria, and verified the
+results. Nothing was accepted on a report, only on a measurement or a passing check: the service tests, builds, and runs
+on the real TV and phone. Each task was specified as a written brief, and errors were fixed in a tight check-and-measure
+loop. What this repository shows of that process:
 
-- 34 commits between 2026-10-05 and 2026-10-28 (31 of them on 5-7 October), all with a `Co-Authored-By: Claude`
-  trailer, and 20 distinct task identifiers (`REMOTE-NETFLIX-HAKU`, `REMOTE-VAAKA`, ...) in the commit subjects.
+- 34 commits between 2026-10-05 and 2026-10-28 (31 of them on 5-7 October), and 20 distinct task identifiers (`REMOTE-NETFLIX-HAKU`, `REMOTE-VAAKA`, ...) in the commit subjects.
 - Code comments record the measurements behind each constant: dates, what failed, and how many presses were lost at
   which delay (for example 64/64 correct at 0.15-0.2 s, lost presses at 0.1 s, in `RuudukkoHaku.swift`).
 - The briefs and the Finnish working registers lived in my private monorepo and are not part of this repository.

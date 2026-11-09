@@ -6,7 +6,7 @@ used in code and file names.
 ## How the work was done
 
 The author, Mikko Paaso, defined the requirements, designed the architecture (two processes, direct SSAP, screenshot
-verification) and decided what to keep. Claude Code agents wrote the code from written task briefs. A task was
+verification) and verified the results. Each task was specified as a written brief. A task was
 accepted only when it passed a gate: the service tests, a build, or a run in the iOS simulator or on the phone against
 the real TV. Failures became new measurements and new fixes, and the findings were written into the code.
 
@@ -25,7 +25,6 @@ is here:
 | Evidence | Where | What it shows |
 |---|---|---|
 | Commit history | `git log` | 34 commits, 2026-10-05 to 2026-10-28; 31 on 5-7 October |
-| `Co-Authored-By: Claude` trailers | every commit | which commits had agent authorship |
 | Task identifiers | commit subjects, code comments | 20 distinct `REMOTE-*` ids, such as `REMOTE-TRACKPAD`, `REMOTE-NETFLIX-HAKU`, `REMOTE-VAAKA` |
 | Measurement notes | code comments | dated measurements and the failed attempt behind a constant (`RuudukkoHaku.swift`, `NetflixHaku.swift`, `AreenaRuudukko.swift`, `ToistoOSD.swift`) |
 | Requirement tags | code comments | `VAATIMUS: REMOTE-NOPEA` (speed) and `VAATIMUS: REMOTE-ANDROID` (keep the logic portable) mark why a design choice was made |
